@@ -51,7 +51,8 @@ def correlation(a_input, b_input, trunc=None):
         a (np.ndarray, real): input 1
         b (np.ndarray, real): input 2
         trunc (int): number of out elements to keep
-    Returns (np.ndarray): correlation """
+    Returns (np.ndarray): correlation. Output has the same number
+        of dimensions as the input. """
 
     assert isinstance(a_input, np.ndarray)
     assert isinstance(b_input, np.ndarray)
@@ -62,8 +63,10 @@ def correlation(a_input, b_input, trunc=None):
 
     # The code assumes 2d shape, reshape from 1d, maintain input var for later
     if a_input.ndim == 1:
+        reshaped = True
         a, b = a_input.reshape(1, -1), b_input.reshape(1, -1)
     else:
+        reshaped = False
         a, b = a_input, b_input
     # store shape of data for later
     ndim, len_a = a.shape
@@ -83,6 +86,6 @@ def correlation(a_input, b_input, trunc=None):
         a = mkl_res_mult_inplace(a, b)
     a = mkl_fft.irfft(a, n=None, axis=-1, overwrite_x=True).reshape(ndim, -1)[:, :trunc]
     a /= np.linspace(len_a, len_a - trunc + 1, trunc).reshape(1, -1)
-    if len(a) == 1:
+    if reshaped:
         return a.flatten()
     return a
