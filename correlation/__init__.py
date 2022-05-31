@@ -1,1 +1,2 @@
-from .correlation import correlation
+from .correlation_mkl import correlation_mkl
+from .correlation import ConditionalCorrelation
