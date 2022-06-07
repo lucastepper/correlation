@@ -44,7 +44,7 @@ def mkl_res_mult_inplace(x, y, real_type, cmplx_type):
     return x
 
 
-def correlation_mkl(a_input, b_input, trunc=None):
+def correlation(a_input, b_input, trunc=None):
     """ Calculates correlation via FFT. Only tested for 1d data.
     Zero pads the data. Zero padding twice makes no difference,
     so we do not check if it has been done already. We check
@@ -93,7 +93,7 @@ def correlation_mkl(a_input, b_input, trunc=None):
         b = np.ascontiguousarray(np.concatenate([b, np.zeros_like(b)], axis=1))
         b = mkl_fft.rfft(b, n=None, axis=-1, overwrite_x=True).reshape(ndim, -1)
         a = mkl_res_conj_inplace(a, real_type, cmplx_type)
-        a = mkl_res_mult_inplace(a, real_type, cmplx_type)
+        a = mkl_res_mult_inplace(a, b, real_type, cmplx_type)
     a = mkl_fft.irfft(a, n=None, axis=-1, overwrite_x=True).reshape(ndim, -1)[:, :trunc]
     a /= np.linspace(len_a, len_a - trunc + 1, trunc).reshape(1, -1)
     if reshaped:

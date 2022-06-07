@@ -2,7 +2,7 @@
 authors = ["lucastepper <lucas.tepper.91@gmail.com>"]
 name = "correlation"
 version = "0.1.0"
-description = "Integrate GLE via Markovian Embedding."
+description = "Compute time correlation functions."
 readme = "README.md"
 edition = "2021"
 
