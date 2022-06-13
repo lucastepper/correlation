@@ -1,8 +1,9 @@
 import numpy as np
 from beartype import beartype
-from beartype.typing import Callable, Optional
+from beartype.typing import Callable, Union, Optional
 import matplotlib.pyplot as plt
 from correlation import correlation
+import gle_sim
 
 
 class IterativeCorrelation:
@@ -78,4 +79,43 @@ class IterativeCorrelation:
         for corr in self.corrs:
             axes.plot(time, corr, alpha=0.5, color=color)
         axes.set(xlabel=xlabel, ylabel=ylabel)
+        return axes
+
+
+class VVCorr(IterativeCorrelation):
+    """Compute the time auto-correlation function of the velocity
+    by computing the gradient of the data added. """
+
+    @beartype
+    def __init__(self, dt: Union[float, int], trunc: Optional[int] = None, keep_corrs=False):
+        super().__init__(lambda x: np.gradient(x, dt), trunc=trunc, keep_corrs=keep_corrs)
+        self.dt = dt
+
+    @beartype
+    def add_data(self, data1: np.ndarray):
+        super().add_data(data1, None)
+
+    def plot(self, axes=None, color=None):
+        axes = super().plot(axes, self.dt, f"$t$ [nm/ps]", "$C^{vv}$ [nm$^2$/ps$^2$]", color)
+        return axes
+
+
+class XdUCorr(IterativeCorrelation):
+    """Compute the time correlation function of the position and
+    the gradient of the pmf. By default, computes dU with gle_sim:
+    https://github.com/lucastepper/gle_sim """
+
+    @beartype
+    def __init__(self, config: dict, trunc: Optional[int] = None, dt: Union[float, int] = None, keep_corrs=False):
+        super().__init__(lambda x: x, lambda x: gle_sim.du_dx(x, config), trunc, keep_corrs)
+        self.dt = dt
+
+    @beartype
+    def add_data(self, data1: np.ndarray):
+        super().add_data(data1, data1)
+
+    def plot(self, axes=None, color=None):
+        axes = super().plot(
+            axes, self.dt, f"$t$ [nm/ps]", "$C^{vv}$ [nm$^2$/ps$^2$]", color
+        )
         return axes
