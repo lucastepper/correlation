@@ -48,6 +48,13 @@ class IterativeCorrelation:
         if data2 is not None:
             if data2.ndim == 1:
                 data2 = data2.reshape(1, -1)
+            if data1.shape[1] != data2.shape[1]:
+                # TODO add message
+                raise ValueError()
+        if data1.shape[1] < self.trunc:
+            self.trunc = data1.shape[1]
+            self.corrs = [corr[:self.trunc] for corr in self.corrs]
+            self.sum_corr = self.sum_corr[:self.trunc]
         # iterate over data
         for i, dat1 in enumerate(data1):
             dat1 = self.conv_func_1(dat1)
@@ -64,10 +71,15 @@ class IterativeCorrelation:
                 self.corrs.append(corr)
             self.n_corr += 1
 
-    def get_results(self):
+    def set_corr(self, corr):
+        self.sum_corr = corr
+        self.n_corr = 1
+        self.corrs = []
+
+    def get_result(self):
         return self.sum_corr / self.n_corr
 
-    def plot(self, axes=None, dt=None, xlabel=None, ylabel=None, color=None):
+    def plot(self, axes=None, dt=None, label=None, color=None, linestyle=None):
         """Plot results."""
         if axes is None:
             axes = plt.subplot()
@@ -75,10 +87,9 @@ class IterativeCorrelation:
             time = np.arange(self.trunc)
         else:
             time = np.arange(self.trunc) * dt
-        axes.plot(time, self.get_results(), color=color)
+        axes.plot(time, self.get_results(), color=color, linestyle=linestyle, label=label)
         for corr in self.corrs:
-            axes.plot(time, corr, alpha=0.5, color=color)
-        axes.set(xlabel=xlabel, ylabel=ylabel)
+            axes.plot(time, corr, alpha=0.5, color=color, linestyle=linestyle)
         return axes
 
 
@@ -92,11 +103,15 @@ class VVCorr(IterativeCorrelation):
         self.dt = dt
 
     @beartype
-    def add_data(self, data1: np.ndarray):
-        super().add_data(data1, None)
+    def add_data(self, pos: np.ndarray):
+        """ Add position data to VVCorr. Velocities are estimated via central differences.
+        Arguments:
+            positions (np.ndarray (ntrajs, nsteps,) or (nsteps,): position data.
+        """
+        super().add_data(pos, None)
 
     def plot(self, axes=None, color=None):
-        axes = super().plot(axes, self.dt, f"$t$ [nm/ps]", "$C^{vv}$ [nm$^2$/ps$^2$]", color)
+        axes = super().plot(axes, self.dt, r"$t$ [nm/ps]", r"$C^{vv}$ [nm$^2$/ps$^2$]", color)
         return axes
 
 
@@ -116,6 +131,6 @@ class XdUCorr(IterativeCorrelation):
 
     def plot(self, axes=None, color=None):
         axes = super().plot(
-            axes, self.dt, f"$t$ [nm/ps]", "$C^{vv}$ [nm$^2$/ps$^2$]", color
+            axes, self.dt, r"$t$ [nm/ps]", r"$C^{vv}$ [nm$^2$/ps$^2$]", color
         )
         return axes
