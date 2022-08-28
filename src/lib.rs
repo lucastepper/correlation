@@ -178,8 +178,8 @@ impl ConditionalCorrelationCuda {
         let module = &self.module;
         let stream = &self.stream;
         // Allocate space on the device and copy numbers to it.
-        let threads_per_block = 256;
-        let nblocks = (datax.len() + (threads_per_block - 1)) / threads_per_block;
+        let threads_per_block = 256 as u32;
+        let nblocks = (self.ncorr as u32 + (threads_per_block - 1)) / threads_per_block;
         println!(
             "Nblocks: {}, Nthreads per block: {}",
             nblocks, threads_per_block
@@ -202,7 +202,7 @@ impl ConditionalCorrelationCuda {
         println!("Nbins: {}", self.nbins);
         unsafe {
             // Launch the `cond-corr` function with one block containing one thread on the given stream.
-            launch!(module.cond_corr<<<1, 20, 0, stream>>>(
+            launch!(module.cond_corr<<<nblocks, threads_per_block, 0, stream>>>(
                 datax.as_device_ptr(),
                 datay.as_device_ptr(),
                 cond.as_device_ptr(),
