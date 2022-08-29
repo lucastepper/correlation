@@ -1,92 +1,146 @@
-#![allow(unused, dead_code)]
 use indicatif::ProgressBar;
 use ndarray as nd;
 use ndarray::parallel::prelude::*;
 use ndarray_npy::read_npy;
+use np::PyArrayDyn;
 use num_cpus;
 use numpy as np;
 use numpy::IntoPyArray;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyList, PyString};
-use rayon;
-use rustacuda::prelude::*;
-use rustacuda::{launch, memory::DeviceBox};
 use std::error::Error;
 use std::ffi::CString;
+#[macro_use]
+extern crate rustacuda;
+use rustacuda::prelude::*;
 
-// TODO return the actual index and then check if it is in range
-// in cond_corr, such that values outside of range are ignored
-fn get_index(x: f64, x_min: f64, dx: f64, nbins: f64) -> usize {
-    f64::min(f64::floor((x - x_min) / dx), nbins - 1.) as usize
+fn get_index(x: f64, x_min: f64, dx: f64) -> f64 {
+    f64::floor((x - x_min) / dx)
 }
 
-// TODO change this to use nbins and range, as it better transferes
-// that bins need to be of the same size
+enum CorrMode {
+    Start,
+    End,
+    Both,
+}
+impl CorrMode {
+    fn new(cond_start: bool, cond_end: bool) -> PyResult<CorrMode> {
+        if cond_start == true && cond_end == true {
+            return Ok(CorrMode::Both);
+        }
+        if cond_start == true && cond_end == false {
+            return Ok(CorrMode::Start);
+        }
+        if cond_start == false && cond_end == true {
+            return Ok(CorrMode::End);
+        }
+        Err(PyValueError::new_err(
+            "Either corr_start or corr_end needs to be True.",
+        ))
+    }
+}
+
 #[pyclass]
 struct ConditionalCorrelationCpu {
-    bins: Py<np::PyArray1<f64>>,
     ncorr: usize,
-    _conditional_sums: nd::Array2<f64>,
-    _conditional_counts: nd::Array2<u64>,
+    start: f64,
+    dx: f64,
+    nbins: f64,
+    cond_sum: Py<PyArrayDyn<f64>>,
+    cond_count: Py<PyArrayDyn<u64>>,
+    corr_mode: CorrMode,
 }
 #[pymethods]
 impl ConditionalCorrelationCpu {
     #[new]
-    fn new(py: Python<'_>, bins: Py<np::PyArray1<f64>>, ncorr: usize) -> PyResult<Self> {
-        // bins should be the edges of the bins, so it has shape nbins + 1
-        let len_bins = unsafe { bins.as_ref(py).as_array().len() };
-        if len_bins < 2 {
+    #[args(cond_start = false, cond_end = true)]
+    fn new(
+        ncorr: usize,
+        nbins: usize,
+        range: [f64; 2],
+        cond_start: bool,
+        cond_end: bool,
+    ) -> PyResult<Self> {
+        if nbins < 2 {
             return Err(PyValueError::new_err("bins must not be empty"));
         }
-        let nbins = len_bins - 1;
-        let _conditional_sums = nd::Array2::zeros((nbins, ncorr));
-        let _conditional_counts = nd::Array2::zeros((nbins, ncorr));
+        let dx = (range[1] - range[0]) / (nbins as f64);
+        let corr_mode = CorrMode::new(cond_start, cond_end)?;
+        let dims = match corr_mode {
+            CorrMode::Both => vec![nbins, nbins, ncorr],
+            _ => vec![nbins, ncorr],
+        };
+        let (cond_sum, cond_count) = pyo3::Python::with_gil(|py| {
+            let cond_sum: Py<np::PyArrayDyn<f64>> =
+                np::PyArray::zeros(py, dims.clone(), false).to_dyn().into();
+            let cond_count: Py<np::PyArrayDyn<u64>> =
+                np::PyArray::zeros(py, dims, false).to_dyn().into();
+            (cond_sum, cond_count)
+        });
         Ok(Self {
-            bins,
             ncorr,
-            _conditional_sums,
-            _conditional_counts,
+            start: range[0],
+            dx,
+            nbins: nbins as f64,
+            cond_sum,
+            cond_count,
+            corr_mode,
         })
     }
 
     #[getter]
-    fn get_bins(&self) -> PyResult<&Py<np::PyArray1<f64>>> {
-        Ok(&self.bins)
+    fn get_nbins(&self) -> PyResult<usize> {
+        Ok(self.nbins as usize)
     }
 
-    #[setter]
-    fn set_bins(&mut self, bins: Py<np::PyArray1<f64>>) -> PyResult<()> {
-        self.bins = bins;
-        Ok(())
+    #[getter]
+    fn get_ncorr(&self) -> PyResult<usize> {
+        Ok(self.ncorr)
+    }
+
+    #[getter]
+    fn get_dx(&self) -> PyResult<f64> {
+        Ok(self.dx)
+    }
+
+    #[getter]
+    fn get_start(&self) -> PyResult<f64> {
+        Ok(self.start)
+    }
+
+    #[getter]
+    fn get_cond_sum<'py>(&'py self, py: Python<'py>) -> PyResult<&'py PyArrayDyn<f64>> {
+        Ok(self.cond_sum.as_ref(py))
+    }
+
+    #[getter]
+    fn get_cond_count<'py>(&'py self, py: Python<'py>) -> PyResult<&'py PyArrayDyn<u64>> {
+        Ok(self.cond_count.as_ref(py))
     }
 
     #[args(nthreads = -1)]
     fn add_data<'py>(
         &mut self,
         py: Python<'py>,
-        corr_data1: &'py np::PyArray1<f64>,
-        corr_data2: &'py np::PyArray1<f64>,
+        data1: &'py np::PyArray1<f64>,
+        data2: &'py np::PyArray1<f64>,
         cond_data: &'py np::PyArray1<f64>,
         nthreads: i32,
     ) -> PyResult<()> {
+        // check input data
+        let data1 = unsafe { data1.as_array() };
+        let data2 = unsafe { data2.as_array() };
         let cond_data = unsafe { cond_data.as_array() };
-        let corr_data1 = unsafe { corr_data1.as_array() };
-        let corr_data2 = unsafe { corr_data2.as_array() };
-        let bins = unsafe { self.bins.as_ref(py).as_array() };
-        if corr_data1.len() != corr_data2.len() {
+        if data1.len() != data2.len() {
             return Err(PyErr::new::<PyValueError, _>(
-                "corr_data1 and corr_data2 must be the same length",
+                "data1 and data2 must be the same length",
             ));
         }
-        if cond_data.len() != corr_data1.len() {
+        if cond_data.len() != data1.len() {
             return Err(PyErr::new::<PyValueError, _>(
-                "cond_data and corr_data must be the same length",
+                "cond_data and data must be the same length",
             ));
         }
-        let nbins = (bins.len() - 1) as f64;
-        let start = bins[0];
-        let dx: f64 = (&bins.slice(nd::s![1..]) - &bins.slice(nd::s![..-1])).sum() / nbins;
         let bar = ProgressBar::new(self.ncorr as u64);
         if nthreads < -1 || nthreads == 0 {
             return Err(PyValueError::new_err("nthreads must be -1 or positive"));
@@ -95,35 +149,73 @@ impl ConditionalCorrelationCpu {
             -1 => num_cpus::get(),
             _ => nthreads as usize,
         };
-        rayon::ThreadPoolBuilder::new()
+        // make outputs
+        let mut cond_sum = unsafe { self.cond_sum.as_ref(py).as_array_mut() };
+        let mut cond_count = unsafe { self.cond_count.as_ref(py).as_array_mut() };
+        let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(nthreads)
-            .build_global();
-        self._conditional_sums
-            .axis_iter_mut(nd::Axis(1))
-            .into_par_iter()
-            .zip(
-                self._conditional_counts
-                    .axis_iter_mut(nd::Axis(1))
-                    .into_par_iter(),
-            )
-            .enumerate()
-            .for_each(|(tcorr, (mut cond_sum, mut cond_count))| {
-                for i in 0..(corr_data1.len() - tcorr) {
-                    let index = get_index(cond_data[i], start, dx, nbins);
-                    cond_sum[index] += corr_data1[i] * corr_data2[i + tcorr];
-                    cond_count[index] += 1;
-                }
-                bar.inc(1);
-            });
+            .build()
+            .unwrap();
+        // we have three cases, conditioning on the first time, the last time or both.
+        // iterate along last dimension, which is the correlation time
+        pool.install(|| {
+            cond_sum
+                .axis_iter_mut(nd::Axis(cond_sum.ndim() - 1))
+                .into_par_iter()
+                .zip(
+                    cond_count
+                        .axis_iter_mut(nd::Axis(cond_count.ndim() - 1))
+                        .into_par_iter(),
+                )
+                .enumerate()
+                .for_each(|(tcorr, (mut cond_sum, mut cond_count))| {
+                    match self.corr_mode {
+                        CorrMode::Start => {
+                            for i in 0..(data1.len() - tcorr) {
+                                let idx = get_index(cond_data[i], self.start, self.dx);
+                                if idx >= 0. && idx < self.nbins {
+                                    let idx = idx as usize;
+                                    cond_sum[idx] += data1[i] * data2[i + tcorr];
+                                    cond_count[idx] += 1;
+                                }
+                            }
+                        }
+                        CorrMode::End => {
+                            for i in 0..(data1.len() - tcorr) {
+                                let idx = get_index(cond_data[i + tcorr], self.start, self.dx);
+                                if idx >= 0. && idx < self.nbins {
+                                    let idx = idx as usize;
+                                    cond_sum[idx] += data1[i] * data2[i + tcorr];
+                                    cond_count[idx] += 1;
+                                }
+                            }
+                        }
+                        _ => {
+                            for i in 0..(data1.len() - tcorr) {
+                                let idx1 = get_index(cond_data[i], self.start, self.dx);
+                                let idx2 = get_index(cond_data[i + tcorr], self.start, self.dx);
+                                if idx1 >= 0. && idx1 < self.nbins {
+                                    if idx2 >= 0. && idx2 < self.nbins {
+                                        let idx1 = idx1 as usize;
+                                        let idx2 = idx2 as usize;
+                                        cond_sum[[idx1, idx2]] += data1[i] * data2[i + tcorr];
+                                        cond_count[[idx1, idx2]] += 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    bar.inc(1);
+                });
+        });
         bar.finish();
         Ok(())
     }
 
-    fn get_result<'py>(&self, py: Python<'py>) -> PyResult<&'py np::PyArray2<f64>> {
-        Ok(
-            (self._conditional_counts.mapv(|c| 1. / c as f64) * &self._conditional_sums)
-                .into_pyarray(py),
-        )
+    fn get_result<'py>(&self, py: Python<'py>) -> PyResult<&'py np::PyArrayDyn<f64>> {
+        let cond_sum = unsafe { self.cond_sum.as_ref(py).as_array() };
+        let cond_count = unsafe { self.cond_count.as_ref(py).as_array() };
+        Ok((cond_count.mapv(|c| 1. / c as f64) * &cond_sum).into_pyarray(py))
     }
 }
 
@@ -152,7 +244,6 @@ impl ConditionalCorrelationCuda {
         let module = Module::load_from_string(&module_data)?;
         let stream = Stream::new(StreamFlags::NON_BLOCKING, None)?;
         let dx = (range[1] - range[0]) / (nbins as f32);
-        // let conditional_sums = unsafe{ DeviceBuffer::zeroed(nbins * tcorr)? };
         let conditional_sums = unsafe { DeviceBuffer::zeroed(nbins * ncorr)? };
         let conditional_counts = unsafe { DeviceBuffer::zeroed(nbins * ncorr)? };
         // init obj
@@ -180,10 +271,6 @@ impl ConditionalCorrelationCuda {
         // Allocate space on the device and copy numbers to it.
         let threads_per_block = 256 as u32;
         let nblocks = (self.ncorr as u32 + (threads_per_block - 1)) / threads_per_block;
-        println!(
-            "Nblocks: {}, Nthreads per block: {}",
-            nblocks, threads_per_block
-        );
         let mut datax = DeviceBuffer::from_slice(
             datax
                 .as_slice()
@@ -198,8 +285,6 @@ impl ConditionalCorrelationCuda {
             cond.as_slice()
                 .expect("cond could not be transformed to slice"),
         )?;
-        let mut result = DeviceBuffer::from_slice(&vec![0.0f32; datax.len()])?;
-        println!("Nbins: {}", self.nbins);
         unsafe {
             // Launch the `cond-corr` function with one block containing one thread on the given stream.
             launch!(module.cond_corr<<<nblocks, threads_per_block, 0, stream>>>(
@@ -291,12 +376,12 @@ fn correlation(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
                     )))
                 }
             };
-            cond_corr_cuda_obj.add_data(datax.view(), datay.view(), cond.view());
+            let _res = cond_corr_cuda_obj.add_data(datax.view(), datay.view(), cond.view());
         }
         let cond_corr = cond_corr_cuda_obj
             .get_result()
             .expect("Something with the cuda calculation went wrong.");
-        Ok(unsafe { cond_corr.into_pyarray(py) })
+        Ok(cond_corr.into_pyarray(py))
     }
 
     m.add_class::<ConditionalCorrelationCpu>()?;
@@ -322,8 +407,8 @@ mod test {
     ) -> (nd::Array2<f32>, nd::Array2<f32>) {
         let mut cond_count = nd::Array2::zeros((nbins, ncorr));
         let mut cond_sum = nd::Array2::zeros((nbins, ncorr));
-        for tcorr in (0..ncorr) {
-            for i in (0..data1.len() - tcorr) {
+        for tcorr in 0..ncorr {
+            for i in 0..data1.len() - tcorr {
                 let idx = index(cond[i], start, dx);
                 if idx >= 0. && idx < nbins as f32 {
                     cond_count[[idx as usize, tcorr]] += 1.;
@@ -367,12 +452,11 @@ mod test {
             dx,
         );
         let mut cond_corr_obj_cuda = ConditionalCorrelationCuda::new(ncorr, nbins, range).unwrap();
-        cond_corr_obj_cuda.add_data(
+        let _res = cond_corr_obj_cuda.add_data(
             test_data.data1.view(),
             test_data.data2.view(),
             test_data.cond.view(),
         );
-        let mut corr_test = cond_corr_obj_cuda.get_result().unwrap();
         let mut cond_count_test = vec![0.; ncorr * nbins];
         cond_corr_obj_cuda
             .conditional_counts
