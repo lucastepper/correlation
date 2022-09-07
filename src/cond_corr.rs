@@ -1,3 +1,4 @@
+#[cfg(feature = "cuda")]
 use super::cond_corr_cuda;
 use super::utils;
 use indicatif::ProgressBar;
@@ -13,6 +14,7 @@ fn get_index(x: f64, x_min: f64, dx: f64) -> f64 {
     f64::floor((x - x_min) / dx)
 }
 
+#[derive(Debug)]
 enum Device {
     Cpu,
     Cuda,
@@ -155,6 +157,7 @@ impl ConditionalCorrelation {
                     self._add_data_cpu(py, dat1, dat2, cond, nthreads)?;
                 }
             }
+            #[cfg(feature = "cuda")]
             Device::Cuda => {
                 // use cuda to compute the conditional sums and counts for the trajectories
                 let (cond_sum, cond_count) = cond_corr_cuda::add_data(
@@ -189,6 +192,11 @@ impl ConditionalCorrelation {
                         .for_each(|(o, x)| *o += *x);
                 }
             }
+            #[cfg(not(feature = "cuda"))]
+            Device::Cuda => panic!(
+                "Invalid device {:?}, build package without cuda support",
+                self.device
+            ),
         };
         Ok(())
     }
