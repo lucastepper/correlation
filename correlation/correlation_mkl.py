@@ -1,9 +1,10 @@
+from typing import Optional
 import numpy as np
 import mkl_fft
 
 
 def mkl_res_conj_inplace(x, real_type, cmplx_type):
-    """ The resulting array of the intel_mkl.fft, broadcasting along
+    """The resulting array of the intel_mkl.fft, broadcasting along
     the first dimension, writes the results in the form Axis 0: n_ffts
     Axis1: Real(Nyquist freq), half the spectrum, Real(zero freq).
     This is possible due to the hermetian spectrum of real data.
@@ -14,7 +15,7 @@ def mkl_res_conj_inplace(x, real_type, cmplx_type):
         real_type (np.float32, np.float64): Type of the real input data
         cmplx_type (np.complex64, np.complex128): Corresponding complex dtype to input type
     Returns:
-        pointer to input array """
+        pointer to input array"""
 
     for i in range(len(x)):
         x[i, 1:-1] = np.conj(x[i, 1:-1].view(cmplx_type)).view(real_type)
@@ -22,7 +23,7 @@ def mkl_res_conj_inplace(x, real_type, cmplx_type):
 
 
 def mkl_res_mult_inplace(x, y, real_type, cmplx_type):
-    """ The resulting array of the intel_mkl.fft, broadcasting along
+    """The resulting array of the intel_mkl.fft, broadcasting along
     the first dimension, writes the results in the form Axis 0: n_ffts
     Axis1: Real(Nyquist freq), half the spectrum, Real(zero freq).
     This is possible due to the hermetian spectrum of real data.
@@ -35,7 +36,7 @@ def mkl_res_mult_inplace(x, y, real_type, cmplx_type):
         cmplx_type (np.complex64, np.complex128): Corresponding complex dtype to real type
     Returns:
         (x) real valued np.ndarray, output of mkl.rfft,
-            written in input x """
+            written in input x"""
 
     for i in range(len(x)):
         x[i, 1:-1] = (x[i, 1:-1].view(cmplx_type) * y[i, 1:-1].view(cmplx_type)).view(real_type)
@@ -44,28 +45,30 @@ def mkl_res_mult_inplace(x, y, real_type, cmplx_type):
     return x
 
 
-def correlation(a_input, b_input, trunc=None):
-    """ Calculates correlation via FFT. Only tested for 1d data.
-    Zero pads the data. Zero padding twice makes no difference,
-    so we do not check if it has been done already. We check
+def correlation(
+    a_input: np.ndarray, b_input: Optional[np.ndarray] = None, trunc: int = None
+) -> np.ndarray:
+    """Calculates correlation via FFT. We check
     if we compute ACF by id(a) == id(b) and only single fft
-    in that case. If trunc not provided,returns len(a) points,
+    in that case. If trunc not provided, returns len(a) points,
     else trunc. Only works for real data, as it uses mkl.rfft.
     Arguments:
         a (np.ndarray, real): input 1
-        b (np.ndarray, real): input 2
+        b (np.ndarray, real): input 2; if None, computes ACF; default None
         trunc (int): number of out elements to keep
     Returns (np.ndarray): correlation. Output has the same number
-        of dimensions as the input. """
-
-    assert a_input.dtype == b_input.dtype
+        of dimensions as the input.
+    """
     assert isinstance(a_input, np.ndarray)
-    assert isinstance(b_input, np.ndarray)
-    assert a_input.shape == b_input.shape
+    assert isinstance(b_input, (type(None), np.ndarray))
     assert np.isreal(a_input.all())
-    assert np.isreal(b_input.all())
+    if b_input is not None:
+        assert a_input.shape == b_input.shape
+        assert a_input.dtype == b_input.dtype
     assert isinstance(trunc, (int, type(None)))
 
+    if b_input is None:
+        b_input = a_input
     # check dtype
     if a_input.dtype == np.float32:
         real_type, cmplx_type = np.float32, np.complex64
@@ -77,21 +80,21 @@ def correlation(a_input, b_input, trunc=None):
         a, b = a_input.reshape(1, -1), b_input.reshape(1, -1)
     else:
         reshaped = False
-        a, b = a_input, b_input
+        a, b = np.ascontiguousarray(a_input), np.ascontiguousarray(b_input)
     # store shape of data for later
     ndim, len_a = a.shape
     if not trunc:
         trunc = len_a
     trunc = min(trunc, len_a)
 
-    a = np.ascontiguousarray(np.concatenate([a, np.zeros_like(a)], axis=1))
-    a = mkl_fft.rfft(a, n=None, axis=-1, overwrite_x=True).reshape(ndim, -1)
+    a = mkl_fft.rfft(a, n=2 * len_a, axis=-1, overwrite_x=True).reshape(ndim, -1)
+    # we have two distinct branches as we want to avoid copying a, but if we do
+    # not have a b array, we need to
     if id(a_input) == id(b_input):
         a1 = mkl_res_conj_inplace(np.copy(a), real_type, cmplx_type)
         a = mkl_res_mult_inplace(a1, a, real_type, cmplx_type)
     else:
-        b = np.ascontiguousarray(np.concatenate([b, np.zeros_like(b)], axis=1))
-        b = mkl_fft.rfft(b, n=None, axis=-1, overwrite_x=True).reshape(ndim, -1)
+        b = mkl_fft.rfft(b, n=2 * len_a, axis=-1, overwrite_x=True).reshape(ndim, -1)
         a = mkl_res_conj_inplace(a, real_type, cmplx_type)
         a = mkl_res_mult_inplace(a, b, real_type, cmplx_type)
     a = mkl_fft.irfft(a, n=None, axis=-1, overwrite_x=True).reshape(ndim, -1)[:, :trunc]
