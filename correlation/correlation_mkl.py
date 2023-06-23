@@ -1,3 +1,4 @@
+import logging
 from typing import Optional
 import numpy as np
 import mkl_fft
@@ -87,14 +88,22 @@ def correlation(
         trunc = len_a
     trunc = min(trunc, len_a)
 
-    a = mkl_fft.rfft(a, n=2 * len_a, axis=-1, overwrite_x=True).reshape(ndim, -1)
+    # somethimes, we get a ValueError: Internal error occurred: b'Intel MKL DFTI ERROR:
+    # Inconsistent configuration parameters', from trying a shape that mkl_fft does not like
+    # in this workaround, we pad with a power of two when it happens
+    pad_len = 2 * len_a
+    try:
+        a = mkl_fft.rfft(a, n=pad_len, axis=-1, overwrite_x=True).reshape(ndim, -1)
+    except ValueError:
+        logging.warning(f"mkl_fft.rfft failed with {pad_len=}, trying pad_len power of 2")
+        a = mkl_fft.rfft(a, n=pad_len, axis=-1, overwrite_x=True).reshape(ndim, -1)
     # we have two distinct branches as we want to avoid copying a, but if we do
     # not have a b array, we need to
     if id(a_input) == id(b_input):
         a1 = mkl_res_conj_inplace(np.copy(a), real_type, cmplx_type)
         a = mkl_res_mult_inplace(a1, a, real_type, cmplx_type)
     else:
-        b = mkl_fft.rfft(b, n=2 * len_a, axis=-1, overwrite_x=True).reshape(ndim, -1)
+        b = mkl_fft.rfft(b, n=pad_len, axis=-1, overwrite_x=True).reshape(ndim, -1)
         a = mkl_res_conj_inplace(a, real_type, cmplx_type)
         a = mkl_res_mult_inplace(a, b, real_type, cmplx_type)
     a = mkl_fft.irfft(a, n=None, axis=-1, overwrite_x=True).reshape(ndim, -1)[:, :trunc]
