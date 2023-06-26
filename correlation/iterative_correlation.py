@@ -13,12 +13,13 @@ LOGFILE = "/tmp/iterative_correlation.log"
 logging.basicConfig(filename=LOGFILE, filemode="w", level=logging.INFO)
 
 
-def get_nsplits(dset: h5py.Dataset) -> int:
+def get_nsplits(dset: h5py.Dataset, stride: int) -> int:
     """Get the amount of available memory. Assume that correlation
     computation requires 17 times the amount of memory as the data.
     """
     mem_avail = psutil.virtual_memory().available
-    fraction = mem_avail / (17 * dset.nbytes)
+    nbytes_data = dset.nbytes // stride
+    fraction = mem_avail / (17 * nbytes_data)
     return int(np.ceil(1 / fraction))
 
 
@@ -41,7 +42,7 @@ class TimingContextManager:
 def iter_chunks(dset: h5py.Dataset, stride: int = 1, nsplits: Optional[int] = None) -> np.ndarray:
     """Iterate over chunks of the dataset, allow for striding."""
     if nsplits is None:
-        nsplits = get_nsplits(dset)
+        nsplits = get_nsplits(dset, stride)
     logging.info(f"Using {nsplits} splits for dataset")
     idxs_split = np.linspace(0, len(dset) + 1, nsplits + 1, dtype=int)
     while len(idxs_split) >= 2:
@@ -316,17 +317,33 @@ class XdUCorr(IterativeCorrelation):
     def __init__(
         self,
         kbt: Optional[float] = None,
+        nbins: Optional[int] = None,
         trunc: Optional[int] = None,
         dt: Union[float, int] = 1.0,
         keep_corrs: bool = False,
         stride: int = 1,
     ):
         self.dteff = dt * stride
-        self.kbt = kbt
+        self._kbt = kbt
+        self._nbins = nbins
         self.config = None
         super().__init__(
             lambda x: x, self.get_du, trunc=trunc, stride=stride, keep_corrs=keep_corrs
         )
+
+    @property
+    def kbt(self) -> float:
+        """ Check that kbt is set when computing fe."""
+        if self._kbt is None:
+            raise ValueError("No kbt set for XdUCorr to compute fe")
+        return self._kbt
+
+    @property
+    def nbins(self) -> int:
+        """ Check that nbins is set when computing fe."""
+        if self._nbins is None:
+            raise ValueError("No nbins set for XdUCorr to compute fe")
+        return self._nbins
 
     def get_du(self, x: np.ndarray) -> np.ndarray:
         """Compute the gradient of the pmf with gle_sim."""
@@ -346,7 +363,7 @@ class XdUCorr(IterativeCorrelation):
         self.config = gle_sim.Config.default()
         self.config.pmf = gle_sim.LinearInterpolation(values=fe[0], fe=fe[1])
 
-    def add_data_h5(self, dset: h5py.Dataset, nsplits: Optional[int] = None, nbins: int = None):
+    def add_data_h5(self, dset: h5py.Dataset, nsplits: Optional[int] = None):
         """Add data from h5py.Dataset bit by bit and stride it. For now,
         we do not implement getting data from multiple datasets. If self.config
         is not set, compute the free energy from the dataset. If dset["fe_nbins_{nbins}"]
@@ -355,26 +372,23 @@ class XdUCorr(IterativeCorrelation):
             dset (h5py.Dataset): dataset to add.
             nsplits (Optional[int]): number of splits to use for iterating over dataset.
                 Defaults to None, which uses available memory to determine nsplits.
-            nbins (int): number of bins to use for computing free energy.
         """
-        if nbins is None:
-            raise ValueError("No nbins set for XdUCorr to compute fe")
         if self.config is None:
-            self.set_fe(compute_fe(dset, nbins, self.kbt, nsplits=nsplits))
+            self.set_fe(compute_fe(dset, self.nbins, self.kbt, nsplits=nsplits))
         super().add_data_h5(dset, nsplits=nsplits)
 
-    def compute_fe(self, trajs: np.ndarray, nbins: int) -> None:
+    def compute_fe(self, trajs: np.ndarray) -> None:
         """Compute fe from trajs. Always use linear interpolation for fe to compute dU.
         Arguments:
             trajs (np.ndarray or Iterable[np.ndarray]): trajectories to compute fe from.
         """
-        if self.kbt is None:
-            raise ValueError("No kbt set for XdUCorr to compute fe")
         if isinstance(trajs, np.ndarray) and trajs.ndim == 1:
             trajs = trajs.reshape(1, -1)
         else:
             if any(not isinstance(traj, np.ndarray) for traj in trajs):
                 raise ValueError("trajs must be a numpy array or iterable of numpy arrays")
+        hist = np.zeros(self.nbins)
+        kbt = self.kbt
         # compute trajs range
         trajs_min, trajs_max = np.inf, -np.inf
         for traj in trajs:
@@ -383,13 +397,12 @@ class XdUCorr(IterativeCorrelation):
             if (max_temp := traj.max()) > trajs_max:
                 trajs_max = max_temp
         # compute fe
-        hist = np.zeros(nbins)
         for traj in trajs:
-            hist_tmp, vals = np.histogram(traj, bins=nbins, range=(trajs_min, trajs_max))
+            hist_tmp, vals = np.histogram(traj, bins=self.nbins, range=(trajs_min, trajs_max))
             hist += hist_tmp
         vals = (vals[1:] + vals[:-1]) / 2
         # pylint: disable=invalid-unary-operand-type
-        fe = -self.kbt * np.log(hist)
+        fe = -kbt * np.log(hist)
         fe = np.stack((vals, fe - fe.min()), axis=0)
         # set self.config for later calls to self.get_du
         self.config = gle_sim.Config.default()

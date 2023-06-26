@@ -109,8 +109,8 @@ def test_xdu_corr(pass_du, ntraj, stride):
         corr_obj = IterativeCorrelation(trunc=trunc, stride=stride)
         add_data = corr_obj.add_data
     else:
-        corr_obj = XdUCorr(trunc=trunc, keep_corrs=True, stride=stride, kbt=KBT)
-        corr_obj.compute_fe([traj for traj, _du in trajs], nbins=200)
+        corr_obj = XdUCorr(trunc=trunc, keep_corrs=True, stride=stride, nbins=200, kbt=KBT)
+        corr_obj.compute_fe([traj for traj, _du in trajs])
         # we need to overwrite du in trajs, as we have the correct, linear force there now
         trajs = [(traj, corr_obj.get_du(traj)) for traj, _ in trajs]
         add_data = lambda x, _du: corr_obj.add_data(x)
@@ -128,9 +128,9 @@ def test_xdu_corr_h5(stride, nsplits):
     """Test the velocity-velocity correlation function from test sim data using h5 file in /tmp"""
     trunc, steps, dt = 10, int(1e5), 1e-3
     traj = gen_test_data(steps, dt)
-    corr_obj = XdUCorr(trunc=trunc, keep_corrs=True, stride=stride, kbt=KBT)
+    corr_obj = XdUCorr(trunc=trunc, keep_corrs=True, stride=stride, kbt=KBT, nbins=200)
     # use corr obj to compute du, as we need linear interpolation for du
-    corr_obj.compute_fe(traj, nbins=200)
+    corr_obj.compute_fe(traj)
     du = corr_obj.get_du(traj)
     corr_ref = correlation_ref(traj[::stride], du[::stride], trunc)
     # kick config again, so we have to recompute du from h5 file
@@ -139,7 +139,7 @@ def test_xdu_corr_h5(stride, nsplits):
     with h5py.File("/tmp/test.h5", "w") as fh:
         _dset = fh.create_dataset("traj", data=traj)
     with h5py.File("/tmp/test.h5", "r") as fh:
-        corr_obj.add_data_h5(fh["traj"], nbins=200, nsplits=nsplits)
+        corr_obj.add_data_h5(fh["traj"], nsplits=nsplits)
     # test
     if nsplits == 1:
         atol, rtol = 1e-16, 1e-7
