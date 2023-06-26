@@ -39,6 +39,26 @@ class TimingContextManager:
         logging.info(f"Execution '{self.execution_name}' took {execution_time:.4e} seconds.")
 
 
+class ComputeMean:
+    """Accumulate data to compute mean over."""
+
+    def __init__(self) -> None:
+        self.sum_vals = 0.0
+        self.counter = 0
+
+    def add_data(self, vals: np.ndarray) -> None:
+        """Accumulate data to compute mean over."""
+        self.sum_vals += np.sum(vals)
+        try:
+            self.counter += np.sum(vals.shape)
+        except AttributeError:
+            self.counter += len(vals)
+
+    def get_result(self) -> float:
+        """Get mean over accumulated data."""
+        return self.sum_vals / self.counter
+
+
 def iter_chunks(dset: h5py.Dataset, stride: int = 1, nsplits: Optional[int] = None) -> np.ndarray:
     """Iterate over chunks of the dataset, allow for striding."""
     if nsplits is None:
@@ -117,6 +137,7 @@ class IterativeCorrelation:
         # conv_func_1 == conv_func_2, which is tedious to check otherwise
         conv_func_1: Optional[Callable] = None,
         conv_func_2: Optional[Callable] = None,
+        hook_data: Callable = lambda _x, _y: None,
         trunc: Optional[int] = None,
         stride: int = 1,
         keep_corrs=False,
@@ -128,6 +149,8 @@ class IterativeCorrelation:
                 Defaults to None, no conversion.
             conv_func_2 (Optional[Callable]): conversion function for argument 2 of correlation.
                 Defaults to None, no conversion.
+            hook_data (Callable[dat1, dat2]): hook to call on data before adding it.
+                Defaults to lambda _x, _y: None.
             trunc (Optional[int]): truncation of correlation. Defaults to None (no truncation).
             stride (int): stride for iterating over data. Defaults to 1.
             keep_corrs (bool): keep all correlations for plotting. Defaults to False.
@@ -136,6 +159,7 @@ class IterativeCorrelation:
         self.stride = stride
         self.conv_func_1 = conv_func_1
         self.conv_func_2 = conv_func_2
+        self.hook_data = hook_data
         self.sum_corr = np.zeros(trunc)
         self.corrs = []
         self.keep_corrs = keep_corrs
@@ -211,6 +235,7 @@ class IterativeCorrelation:
         for dat1, dat2 in zip(data1, data2):
             conv_dat1 = self.convert_data_1(dat1, stride)
             conv_dat2 = self.convert_data_2(dat1, dat2, stride)
+            self.hook_data(conv_dat1, conv_dat2)
             corr = correlation(conv_dat1, conv_dat2, self.trunc)
             # use len(conv_dat1) instead of len(dat1) to account for striding and possible
             # change of shape due to conversion
@@ -285,9 +310,11 @@ class VVCorr(IterativeCorrelation):
             keep_corrs (bool): keep all correlations for plotting. Defaults to False.
         """
         self.dteff = dt * stride
+        self.mean_vsqrd = ComputeMean()
         super().__init__(
             conv_func_1=lambda x: np.diff(x) / self.dteff,
             conv_func_2=lambda x: np.diff(x) / self.dteff,
+            hook_data=lambda v, _v: self.mean_vsqrd.add_data(v**2),
             trunc=trunc,
             stride=stride,
             keep_corrs=keep_corrs,
@@ -302,6 +329,10 @@ class VVCorr(IterativeCorrelation):
                 where we already stride while iterating in iter_chunks.
         """
         super().add_data(pos, None, stride=stride)
+
+    def get_mean_vsqrd(self) -> float:
+        """ Get mean of squared veloicty over accumulated data."""
+        return self.mean_vsqrd.get_result()
 
     def plot(self, axes=None, color=None):
         axes = super().plot(axes, self.dteff, color=color)
@@ -327,20 +358,26 @@ class XdUCorr(IterativeCorrelation):
         self._kbt = kbt
         self._nbins = nbins
         self.config = None
+        self.mean_du = ComputeMean()
         super().__init__(
-            lambda x: x, self.get_du, trunc=trunc, stride=stride, keep_corrs=keep_corrs
+            conv_func_1=lambda x: x,
+            conv_func_2=self.get_du,
+            hook_data=lambda _x, du: self.mean_du.add_data(du),
+            trunc=trunc,
+            stride=stride,
+            keep_corrs=keep_corrs,
         )
 
     @property
     def kbt(self) -> float:
-        """ Check that kbt is set when computing fe."""
+        """Check that kbt is set when computing fe."""
         if self._kbt is None:
             raise ValueError("No kbt set for XdUCorr to compute fe")
         return self._kbt
 
     @property
     def nbins(self) -> int:
-        """ Check that nbins is set when computing fe."""
+        """Check that nbins is set when computing fe."""
         if self._nbins is None:
             raise ValueError("No nbins set for XdUCorr to compute fe")
         return self._nbins
@@ -408,6 +445,10 @@ class XdUCorr(IterativeCorrelation):
         self.config = gle_sim.Config.default()
         self.config.pmf = gle_sim.LinearInterpolation(values=fe[0], fe=fe[1])
         return fe
+
+    def get_mean_du(self) -> float:
+        """Get mean over the gradient of the force over all data added."""
+        return self.mean_du.get_result()
 
     def plot(self, axes=None, color=None):
         axes = super().plot(axes, self.dteff, color=color)
