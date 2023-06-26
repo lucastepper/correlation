@@ -6,19 +6,21 @@ from correlation import correlation, correlation_torch
 
 @njit
 def correlation_ref(a, b, trunc):
-    """ Calculates correlation directly. """
+    """Calculates correlation directly."""
+    if len(a) != len(b):
+        raise ValueError("a and b must have the same length")
     output = np.zeros(trunc)
     counter = np.zeros(trunc)
-    for i in range(trunc):
-        for j in range(trunc - i):
-            output[j] += a[i] * b[i + j]
-            counter[j] += 1
+    for tcorr in range(trunc):
+        for iframe in range(len(a) - tcorr):
+            output[tcorr] += a[iframe] * b[iframe + tcorr]
+            counter[tcorr] += 1
     output /= counter
     return output
 
 
 def correlation_ref_fft(a, b, trunc, bconj=False):
-    """ Calculates correlation via FFT. """
+    """Calculates correlation via FFT."""
     len_a = len(a)
     a = np.concatenate([a, np.zeros(len_a)])
     b = np.concatenate([b, np.zeros(len_a)])
@@ -33,9 +35,10 @@ def correlation_ref_fft(a, b, trunc, bconj=False):
     corr /= np.linspace(len_a, len_a - trunc + 1, trunc)
     return corr
 
+
 @pytest.mark.parametrize("test_torch, device", [(False, "cpu"), (True, "cpu"), (True, "cuda")])
 def test_autocorr_1d(test_torch, device):
-    """ Test computation of autocorrelation. """
+    """Test computation of autocorrelation."""
     size = int(1e3 + 1)
     np.random.seed(42)
     time = np.arange(size) * 0.02
@@ -53,7 +56,7 @@ def test_autocorr_1d(test_torch, device):
 
 @pytest.mark.parametrize("test_torch, device", [(False, "cpu"), (True, "cpu"), (True, "cuda")])
 def test_corr_1d(test_torch, device):
-    """ Test computation of correlation. """
+    """Test computation of correlation."""
     size = int(1e4 + 1)
     np.random.seed(42)
     time = np.arange(size) * 0.02
@@ -73,10 +76,9 @@ def test_corr_1d(test_torch, device):
     np.testing.assert_allclose(data2, data2_copy)
 
 
-
 @pytest.mark.parametrize("test_torch, device", [(False, "cpu"), (True, "cpu"), (True, "cuda")])
 def test_autocorr_2d(test_torch, device):
-    """ Test computation of correlation in 2d. """
+    """Test computation of correlation in 2d."""
     size = (3, int(1e3 + 11))
     np.random.seed(42)
     time = np.arange(size[1]) * 0.02
@@ -92,10 +94,9 @@ def test_autocorr_2d(test_torch, device):
     np.testing.assert_allclose(data, data_copy)
 
 
-
 @pytest.mark.parametrize("test_torch, device", [(False, "cpu"), (True, "cpu"), (True, "cuda")])
 def test_corr_2d(test_torch, device):
-    """ Test computation of correlation in 2d. """
+    """Test computation of correlation in 2d."""
     size = (3, int(1e3 + 11))
     np.random.seed(42)
     time = np.arange(size[1]) * 0.02
