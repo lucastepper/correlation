@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import gle_sim
 from .correlation_mkl import correlation
 
+MEMFACTOR = 17
 LOGFILE = "/tmp/iterative_correlation.log"
 
 logging.basicConfig(filename=LOGFILE, filemode="w", level=logging.INFO)
@@ -15,11 +16,11 @@ logging.basicConfig(filename=LOGFILE, filemode="w", level=logging.INFO)
 
 def get_nsplits(dset: h5py.Dataset, stride: int) -> int:
     """Get the amount of available memory. Assume that correlation
-    computation requires 17 times the amount of memory as the data.
+    computation requires MEMFACTOR (17) times the amount of memory as the data.
     """
     mem_avail = psutil.virtual_memory().available
     nbytes_data = dset.nbytes // stride
-    fraction = mem_avail / (17 * nbytes_data)
+    fraction = mem_avail / (MEMFACTOR * nbytes_data)
     return int(np.ceil(1 / fraction))
 
 
@@ -170,8 +171,8 @@ class IterativeCorrelation:
         if self.conv_func_1 is None:
             return data1[::stride]
         out = self.conv_func_1(data1[::stride])
-        if not isinstance(out, np.ndarray):
-            raise ValueError(f"conv_func: '{self.conv_func_1}' does not return a numpy array")
+        if not isinstance(out, (type(None), np.ndarray)):
+            raise ValueError(f"conv_func21 does not return a numpy array or None")
         return out
 
     def convert_data_2(self, data1, data2, stride):
@@ -189,8 +190,8 @@ class IterativeCorrelation:
         if self.conv_func_2 is None:
             return input_for_func[::stride]
         out = self.conv_func_2(input_for_func[::stride])
-        if not isinstance(out, np.ndarray):
-            raise ValueError(f"conv_func: '{self.conv_func_2}' does not return a numpy array")
+        if not isinstance(out, (type(None), np.ndarray)):
+            raise ValueError(f"conv_func2 does not return a numpy array or None")
         return out
 
     def add_corr(self, corr, len_data):
@@ -295,7 +296,8 @@ class VVCorr(IterativeCorrelation):
 
     def __init__(
         self,
-        dt: Union[float, int],
+        dt: Optional[Union[float, int]] = None,
+        gradient_func: Optional[Callable] = None,
         trunc: Optional[int] = None,
         stride: int = 1,
         keep_corrs: bool = False,
@@ -305,15 +307,27 @@ class VVCorr(IterativeCorrelation):
         Arguments:
             dt (Union[float, int]): time step of data. Time step is multiplied by stride
                 to compute the effective time step, which is used to compute the velocities.
+            gradient_func (Optional[Callable]): gradient function to compute velocities.
+                Defaults to None, uses lambda x: np.diff(x) / self.dt.
             trunc (Optional[int]): truncation of correlation. Defaults to None (no truncation).
             stride (int): stride for iterating over data. Defaults to 1.
             keep_corrs (bool): keep all correlations for plotting. Defaults to False.
         """
-        self.dteff = dt * stride
+        if dt is None and gradient_func is None:
+            raise ValueError("Either dt or gradient_func must be set")
+        if gradient_func is None:
+            gradient_func = lambda x: np.diff(x) / self.dteff
+        elif dt is None:
+            self.dteff = 1.0
+        else:
+            self.dteff = dt * stride
         self.mean_vsqrd = ComputeMean()
         super().__init__(
-            conv_func_1=lambda x: np.diff(x) / self.dteff,
-            conv_func_2=lambda x: np.diff(x) / self.dteff,
+            conv_func_1=gradient_func,
+            # If we don't return None here, we compute the gradient twice
+            # and then the two gradients have different id()s, so we do extra
+            # work in correlation, which is not necessary
+            conv_func_2=lambda _x: None,
             hook_data=lambda v, _v: self.mean_vsqrd.add_data(v**2),
             trunc=trunc,
             stride=stride,
