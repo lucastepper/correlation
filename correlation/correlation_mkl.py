@@ -95,7 +95,10 @@ def correlation(
     try:
         a = mkl_fft.rfft(a, n=pad_len, axis=-1, overwrite_x=True).reshape(ndim, -1)
     except ValueError:
-        logging.warning(f"mkl_fft.rfft failed with {pad_len=}, trying pad_len power of 2")
+        pad_len_new = 2 ** int(np.ceil(np.log2(pad_len)) + 1)
+        assert pad_len_new > pad_len
+        logging.warning(f"mkl_fft.rfft failed with {pad_len=}, trying {pad_len_new=}")
+        pad_len = pad_len_new
         a = mkl_fft.rfft(a, n=pad_len, axis=-1, overwrite_x=True).reshape(ndim, -1)
     # we have two distinct branches as we want to avoid copying a, but if we do
     # not have a b array, we need to
