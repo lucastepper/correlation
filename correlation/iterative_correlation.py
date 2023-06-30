@@ -315,12 +315,12 @@ class VVCorr(IterativeCorrelation):
         """
         if dt is None and gradient_func is None:
             raise ValueError("Either dt or gradient_func must be set")
-        if gradient_func is None:
-            gradient_func = lambda x: np.diff(x) / self.dteff
         elif dt is None:
             self.dteff = 1.0
         else:
             self.dteff = dt * stride
+        if gradient_func is None:
+            gradient_func = lambda x: np.diff(x) / self.dteff
         self.mean_vsqrd = ComputeMean()
         super().__init__(
             conv_func_1=gradient_func,

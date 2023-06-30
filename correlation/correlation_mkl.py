@@ -92,14 +92,23 @@ def correlation(
     # Inconsistent configuration parameters', from trying a shape that mkl_fft does not like
     # in this workaround, we pad with a power of two when it happens
     pad_len = 2 * len_a
+    # I am not sure which shapes produce errors, but maybe factors of 1000 work?
+    if pad_len % 1000 != 0:
+        pad_len = int(pad_len + 1000 - pad_len % 1000)
+    import time
+    t1 = time.time()
     try:
         a = mkl_fft.rfft(a, n=pad_len, axis=-1, overwrite_x=True).reshape(ndim, -1)
+        logging.info(f"try worked with {len(a_input):.1e}, data took ", time.time() - t1)
     except ValueError:
-        pad_len_new = 2 ** int(np.ceil(np.log2(pad_len)) + 1)
+        logging.info(f"try failed, took {time.time() - t1}")
+        pad_len_new = 2 ** int(np.ceil(np.log2(pad_len)))
         assert pad_len_new > pad_len
         logging.warning(f"mkl_fft.rfft failed with {pad_len=}, trying {pad_len_new=}")
         pad_len = pad_len_new
+        t1 = time.time()
         a = mkl_fft.rfft(a, n=pad_len, axis=-1, overwrite_x=True).reshape(ndim, -1)
+        logging.info(f"Using alternative with {len(a_input):.1e}, data took {time.time() - t1}")
     # we have two distinct branches as we want to avoid copying a, but if we do
     # not have a b array, we need to
     if id(a_input) == id(b_input):
