@@ -80,8 +80,8 @@ impl ConditionalCorrelation {
         let dx = (range[1] - range[0]) / (nbins as f64);
         let corr_mode = CorrMode::new(cond_start, cond_end)?;
         let dims = match corr_mode {
-            CorrMode::Both => vec![nbins, nbins, ncorr],
-            _ => vec![nbins, ncorr],
+            CorrMode::Both => vec![ncorr, nbins, nbins],
+            _ => vec![ncorr, nbins],
         };
         let (cond_sum, cond_count) = pyo3::Python::with_gil(|py| {
             let cond_sum: Py<np::PyArrayDyn<f64>> =
@@ -142,6 +142,8 @@ impl ConditionalCorrelation {
         nthreads: i32,
     ) -> PyResult<()> {
         // first cast to list of PyAny so that it works for single or multiple inputs
+        // We can't use utils::convert_list_pyany_to_vec_* to cast into PyArray already,
+        // as we want PyArray1<f64> for cpu and PyArray1<f32> for cuda
         let data1 = utils::convert_list_pyany_to_vec_pyany(data1)?;
         let data2 = utils::convert_list_pyany_to_vec_pyany(data2)?;
         let cond_data = utils::convert_list_pyany_to_vec_pyany(cond_data)?;
@@ -175,12 +177,12 @@ impl ConditionalCorrelation {
                     let mut self_cond_sum = self
                         .cond_sum
                         .as_ref(py)
-                        .reshape((self.nbins, self.ncorr))?
+                        .reshape((self.ncorr, self.nbins))?
                         .as_array_mut();
                     let mut self_cond_count = self
                         .cond_count
                         .as_ref(py)
-                        .reshape((self.nbins, self.ncorr))?
+                        .reshape((self.ncorr, self.nbins))?
                         .as_array_mut();
                     self_cond_sum
                         .iter_mut()
@@ -234,13 +236,9 @@ impl ConditionalCorrelation {
         // iterate along last dimension, which is the correlation time
         pool.install(|| {
             cond_sum
-                .axis_iter_mut(nd::Axis(cond_sum.ndim() - 1))
+                .axis_iter_mut(nd::Axis(0))
                 .into_par_iter()
-                .zip(
-                    cond_count
-                        .axis_iter_mut(nd::Axis(cond_count.ndim() - 1))
-                        .into_par_iter(),
-                )
+                .zip(cond_count.axis_iter_mut(nd::Axis(0)).into_par_iter())
                 .enumerate()
                 .for_each(|(tcorr, (mut cond_sum, mut cond_count))| {
                     match self.corr_mode {

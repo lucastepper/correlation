@@ -18,8 +18,8 @@ extern "C" __global__ void cond_corr(
         for (int i = 0; i < (len - tcorr); i++) {
             int idx = (int)floor(((cond[i] - start) / dx));
             if (idx >= 0 && idx < nbins) {
-                cond_sum[idx * ncorr + tcorr] += x[i] * y[i + tcorr];
-                cond_count[idx * ncorr + tcorr] += 1;
+                cond_sum[tcorr * nbins + idx] += x[i] * y[i + tcorr];
+                cond_count[tcorr * nbins + idx] += 1;
             }
         }
     }

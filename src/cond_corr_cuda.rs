@@ -71,8 +71,8 @@ impl ConditionalCorrelationCuda {
         let module_data = into_pyresult(CString::new(include_str!("conditional_corr.ptx")))?;
         let module = into_pyresult(Module::load_from_string(&module_data))?;
         let stream = into_pyresult(Stream::new(StreamFlags::NON_BLOCKING, None))?;
-        let conditional_sums = unsafe { into_pyresult(DeviceBuffer::zeroed(nbins * ncorr))? };
-        let conditional_counts = unsafe { into_pyresult(DeviceBuffer::zeroed(nbins * ncorr))? };
+        let conditional_sums = unsafe { into_pyresult(DeviceBuffer::zeroed(ncorr * nbins))? };
+        let conditional_counts = unsafe { into_pyresult(DeviceBuffer::zeroed(ncorr * nbins))? };
         // init obj
         Ok(ConditionalCorrelationCuda {
             ncorr,
@@ -132,13 +132,13 @@ impl ConditionalCorrelationCuda {
     }
 
     pub fn get_cond_data(&mut self) -> Result<(nd::Array2<f64>, nd::Array2<u64>), Box<dyn Error>> {
-        let mut sum_host = vec![0.; self.nbins * self.ncorr];
-        let mut count_host = vec![0; self.nbins * self.ncorr];
+        let mut sum_host = vec![0.; self.ncorr * self.nbins];
+        let mut count_host = vec![0; self.ncorr * self.nbins];
         self.conditional_sums.copy_to(&mut sum_host)?;
         self.conditional_counts.copy_to(&mut count_host)?;
         let sum_host = sum_host.into_iter().map(|x| x as f64).collect();
-        let sum_host = nd::Array2::from_shape_vec((self.nbins, self.ncorr), sum_host)?;
-        let count_host = nd::Array2::from_shape_vec((self.nbins, self.ncorr), count_host)?;
+        let sum_host = nd::Array2::from_shape_vec((self.ncorr, self.nbins), sum_host)?;
+        let count_host = nd::Array2::from_shape_vec((self.ncorr, self.nbins), count_host)?;
         Ok((sum_host, count_host))
     }
 }
