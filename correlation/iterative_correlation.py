@@ -345,7 +345,7 @@ class VVCorr(IterativeCorrelation):
         super().add_data(pos, None, stride=stride)
 
     def get_mean_vsqrd(self) -> float:
-        """ Get mean of squared veloicty over accumulated data."""
+        """Get mean of squared veloicty over accumulated data."""
         return self.mean_vsqrd.get_result()
 
     def plot(self, axes=None, color=None):
@@ -357,13 +357,25 @@ class VVCorr(IterativeCorrelation):
 class XdUCorr(IterativeCorrelation):
     """Compute the time correlation function of the position and
     the gradient of the pmf. By default, computes dU with gle_sim:
-    https://github.com/lucastepper/gle_sim"""
+    https://github.com/lucastepper/gle_sim.
+    Arguments:
+        kbt (Optional[float]): temperature times Boltzmann constant.
+        nbins (Optional[int]): number of bins for pmf. Defaults to None.
+        trunc (Optional[int]): truncation of correlation. Defaults to None (no truncation).
+        interpolation (Optional[str]): interpolation method for pmf. Defaults to "linear".
+            Also allowed: "splines"
+        dt (Union[float, int]): time step of data. Only used for plotting.
+            Time step is multiplied by stride
+        keep_corrs (bool): keep all correlations for plotting. Defaults to False.
+        stride (int): stride for iterating over data. Defaults to 1.
+    """
 
     def __init__(
         self,
-        kbt: Optional[float] = None,
+            kbt: Optional[float] = None,
         nbins: Optional[int] = None,
         trunc: Optional[int] = None,
+        interpolation: Optional[str] = "linear",
         dt: Union[float, int] = 1.0,
         keep_corrs: bool = False,
         stride: int = 1,
@@ -371,6 +383,7 @@ class XdUCorr(IterativeCorrelation):
         self.dteff = dt * stride
         self._kbt = kbt
         self._nbins = nbins
+        self.interpolation = interpolation
         self.config = None
         self.mean_du = ComputeMean()
         super().__init__(
@@ -412,7 +425,12 @@ class XdUCorr(IterativeCorrelation):
         if not fe.shape[0] == 2 or not fe.ndim == 2:
             raise ValueError(f"fe must have shape (2, nbins), got {fe.shape}")
         self.config = gle_sim.Config.default()
-        self.config.pmf = gle_sim.LinearInterpolation(values=fe[0], fe=fe[1])
+        if self.interpolation == "linear":
+            self.config.pmf = gle_sim.LinearInterpolation(values=fe[0], fe=fe[1])
+        elif self.interpolation == "splines":
+            self.config.pmf = gle_sim.CubicSplineInterpolation.from_values_fe(values=fe[0], fe=fe[1])
+        else:
+            raise ValueError(f"Unknown interpolation method {self.interpolation}")
 
     def add_data_h5(self, dset: h5py.Dataset, nsplits: Optional[int] = None):
         """Add data from h5py.Dataset bit by bit and stride it. For now,
@@ -455,9 +473,7 @@ class XdUCorr(IterativeCorrelation):
         # pylint: disable=invalid-unary-operand-type
         fe = -kbt * np.log(hist)
         fe = np.stack((vals, fe - fe.min()), axis=0)
-        # set self.config for later calls to self.get_du
-        self.config = gle_sim.Config.default()
-        self.config.pmf = gle_sim.LinearInterpolation(values=fe[0], fe=fe[1])
+        self.set_fe(fe)
         return fe
 
     def get_mean_du(self) -> float:
