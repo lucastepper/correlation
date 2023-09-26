@@ -41,6 +41,8 @@ def corr(a, b, cond, ncorr, cond_start, cond_end, x_min, dx, nbins):
         (1, True, False, "cuda", False),
         (1, True, False, "cpu", True),
         (1, False, True, "cpu", True),
+        (1, True, False, "cuda", True),
+        (1, False, True, "cuda", True),
     ],
 )
 def test_cond_corr(threads, cond_start, cond_end, device, fft):
@@ -63,7 +65,12 @@ def test_cond_corr(threads, cond_start, cond_end, device, fft):
         test_obj = correlation.ConditionalCorrelationFFT.from_range(
             ncorr=ncorr, traj_range=tuple(range_bins), nbins=nbins, cond_start=cond_start
         )
-        test_obj.add_data(a, b, a)
+        if device == "cuda":
+            test_obj.add_data_cuda(a, b, a, dtype="float64")
+        elif device == "cpu":
+            test_obj.add_data(a, b, a)
+        else:
+            raise ValueError("device must be cpu or cuda")
     else:
         test_obj = correlation.ConditionalCorrelation(
             ncorr, nbins, range_bins, cond_start, cond_end, device

@@ -1,5 +1,6 @@
 from typing import Optional, Union
 import numpy as np
+
 # allow for optional torch import
 try:
     import torch
@@ -7,8 +8,30 @@ except ImportError:
     pass
 
 
+def string_to_torch_dtype(data_type_str: Union[str, torch.dtype]) -> torch.dtype:
+    if isinstance(data_type_str, torch.dtype):
+        return data_type_str
+    data_type_str = str(data_type_str).lower()
+    match data_type_str:
+        case 'float32':
+            return torch.float32
+        case 'float64':
+            return torch.float64
+        case 'int32':
+            return torch.int32
+        case 'int64':
+            return torch.int64
+        case _:
+            raise ValueError(f"Unsupported data type: {data_type_str}")
+
+
 def correlation_torch(
-    a: Union[np.ndarray, torch.Tensor], b: Optional[Union[np.ndarray, torch.Tensor]] = None, trunc: int = None, device: str = "cpu"
+    a: Union[np.ndarray, torch.Tensor],
+    b: Optional[Union[np.ndarray, torch.Tensor]] = None,
+    trunc: int = None,
+    device: str = "cpu",
+    device_out: str = "cpu",
+    dtype: str = None,
 ) -> Union[np.ndarray, torch.Tensor]:
     """Calculates correlation via FFT. We check
     if we compute ACF by id(a) == id(b) and only single fft
@@ -19,6 +42,8 @@ def correlation_torch(
         b (np.ndarray, torch.Tensor, real): input 2; if None, computes ACF; default None
         trunc (int): number of out elements to keep
         device (str): device to use for torch, default cpu
+        device_out (str): device on which result is returned, default cpu
+        dtype (str, torch.dtype): dtype for calculation, default a.dtype
     Returns (np.ndarray, torch.Tensor): correlation. Output has the same number
         of dimensions as the input, returns same type as input.
     """
@@ -27,6 +52,9 @@ def correlation_torch(
     if b is not None:
         assert a.shape == b.shape
         assert a.dtype == b.dtype
+    if dtype is None:
+        dtype = a.dtype
+    dtype = string_to_torch_dtype(dtype)
 
     # The code assumes 2d shape, reshape from 1d, maintain input var for later
     input_ndarray = isinstance(a, np.ndarray)
@@ -41,10 +69,9 @@ def correlation_torch(
         raise ValueError(f"Only 1d and 2d arrays supported, got {a.ndim}d array.")
     # convert to torch
     if isinstance(a, np.ndarray):
-        a = torch.tensor(a, device=device)
+        a = torch.tensor(a, device=device, dtype=dtype)
     if isinstance(b, np.ndarray):
-        b = torch.tensor(b, device=device)
-    dtype = a.dtype
+        b = torch.tensor(b, device=device, dtype=dtype)
     if b is None:
         b = a
 
@@ -64,7 +91,7 @@ def correlation_torch(
     a = torch.real(torch.fft.irfft(a, n=None, dim=-1)[:, :trunc])
     a /= torch.linspace(len_a, len_a - trunc + 1, trunc, device=device, dtype=dtype).reshape(1, -1)
     # return numpy if input was numpy, return 1d if input was 1d
-    a = a.cpu()
+    a = a.to(device_out)
     if input_ndarray:
         a = a.numpy()
     if reshaped:

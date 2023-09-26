@@ -1,9 +1,13 @@
 import math
+import time
 from typing import Union
+from matplotlib import pyplot as plt
 import numpy as np
 from numba import njit
+import torch
 import tqdm
-import correlation
+from .correlation_torch import correlation_torch, string_to_torch_dtype
+from .correlation_mkl import correlation
 
 
 @njit
@@ -104,7 +108,7 @@ class ConditionalCorrelationFFT:
         intervals = np.linspace(*traj_range, nbins + 1)
         return cls(ncorr, intervals, cond_start=cond_start, verbose=verbose)
 
-    def check_traj_lenght(self, traj):
+    def check_traj_length(self, traj):
         """Check that is the trajectory is at least as long as self.ncorr.
         If not, shorten self.ncorr and self.cond_fft_sum.
         """
@@ -112,9 +116,9 @@ class ConditionalCorrelationFFT:
             self.ncorr = len(traj)
             self.cond_fft_sum = self.cond_fft_sum[: self.ncorr, :]
 
-    def add_data(self, data1: np.ndarray, data2: np.ndarray, cond: np.ndarray):
-        """Compute conditional correlation using FFT, by multipling with indicator
-        functions for each bin at time t(0). Assumes that input data is 1-dimensional.
+    def precheck_add_data(self, data1: np.ndarray, data2: np.ndarray, cond: np.ndarray):
+        """ Check that the dims of all trajs are 1, check that all trajs are longer than self.ncorr
+        or else shorten self.ncorr finally check that all trajs have same length.
         """
         if data1.ndim != 1 or data2.ndim != 1 or cond.ndim != 1:
             raise ValueError(
@@ -122,7 +126,17 @@ class ConditionalCorrelationFFT:
             )
         # shorten self.ncorr and self.cond_fft_sum if traj is too short
         for traj in [data1, data2, cond]:
-            self.check_traj_lenght(traj)
+            self.check_traj_length(traj)
+        if len(data1) != len(data2) or len(data1) != len(cond):
+            raise ValueError(
+                f"Trajs need to have same length, but found {len(data1)=}, {len(data2)=}, {len(cond)=}"
+            )
+    
+    def add_data(self, data1: np.ndarray, data2: np.ndarray, cond: np.ndarray):
+        """Compute conditional correlation using FFT, by multipling with indicator
+        functions for each bin at time t(0). Assumes that input data is 1-dimensional.
+        """
+        self.precheck_add_data(data1, data2, cond)
         # compute conditional correlation
         cond_corr = np.zeros((self.ncorr, self.nbins))
         counts = np.zeros((1, self.nbins))
@@ -137,10 +151,52 @@ class ConditionalCorrelationFFT:
                 norm = len(data1) / count
             else:
                 norm = np.nan
-            cond_corr[:, ibin] = norm * correlation.correlation(cdata1, cdata2, trunc=self.ncorr)
+            cond_corr[:, ibin] = norm * correlation(cdata1, cdata2, trunc=self.ncorr)
             counts[:, ibin] = count
         self.counts_sum += counts
         self.cond_fft_sum += counts * cond_corr
+
+    def add_data_cuda(self, data1: np.ndarray, data2: np.ndarray, cond: np.ndarray, dtype=torch.float32):
+        """Compute conditional correlation using FFT on gpu with torch, by multipling with indicator
+        functions for each bin at time t(0). Assumes that input data is 1-dimensional.
+        """
+        print(f"{data1.shape=}, {data2.shape=}, {cond.shape=}")
+        self.precheck_add_data(data1, data2, cond)
+        dtype = string_to_torch_dtype(dtype)
+        # compute conditional correlation
+        data1 = torch.Tensor(data1).to(dtype=dtype).cuda()
+        data2 = torch.Tensor(data2).to(dtype=dtype).cuda()
+        cond = torch.Tensor(cond).to(dtype=dtype).cuda()
+        if self.nbins >= 2**8:
+            raise ValueError(f"Too many bins: {self.nbins=}")
+        idxs = torch.floor((cond - self.start) / self.dx).to(dtype=torch.int8)
+        temp_array = torch.zeros_like(data1)
+
+        # output arrays
+        cond_corr = torch.zeros((self.ncorr, self.nbins), dtype=dtype, device="cuda")
+        counts = torch.zeros((1, self.nbins), dtype=dtype, device="cuda")
+        for ibin in tqdm.tqdm(range(self.nbins), disable=not self.verbose, leave=False):
+            temp_array.fill_(0)
+            if self.cond_start:
+                temp_array[idxs == ibin] = data1[idxs == ibin]
+                cdata1 = temp_array
+                cdata2 = data2
+            else:
+                temp_array[idxs == ibin] = data2[idxs == ibin]
+                cdata1 = data1
+                cdata2 = temp_array
+            count = torch.sum(idxs == ibin)
+            if count > 0:
+                norm = len(data1) / count
+            else:
+                norm = np.nan
+            # norm = torch.tensor(norm, dtype=dtype, device="cuda")
+            corr = correlation_torch(cdata1, cdata2, trunc=self.ncorr, dtype=dtype, device="cuda", device_out="cuda")
+            # print(corr.dtype, corr.device)
+            cond_corr[:, ibin] = norm * corr
+            counts[:, ibin] = count
+        self.counts_sum += counts.cpu().numpy()
+        self.cond_fft_sum += (counts * cond_corr).cpu().numpy()
 
     def get_result(self):
         """Gather the resulting conditional correlation function from all data added.
