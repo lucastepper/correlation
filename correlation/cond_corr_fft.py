@@ -131,7 +131,7 @@ class ConditionalCorrelationFFT:
             raise ValueError(
                 f"Trajs need to have same length, but found {len(data1)=}, {len(data2)=}, {len(cond)=}"
             )
-    
+
     def add_data(self, data1: np.ndarray, data2: np.ndarray, cond: np.ndarray):
         """Compute conditional correlation using FFT, by multipling with indicator
         functions for each bin at time t(0). Assumes that input data is 1-dimensional.
@@ -160,7 +160,6 @@ class ConditionalCorrelationFFT:
         """Compute conditional correlation using FFT on gpu with torch, by multipling with indicator
         functions for each bin at time t(0). Assumes that input data is 1-dimensional.
         """
-        print(f"{data1.shape=}, {data2.shape=}, {cond.shape=}")
         self.precheck_add_data(data1, data2, cond)
         dtype = string_to_torch_dtype(dtype)
         # compute conditional correlation

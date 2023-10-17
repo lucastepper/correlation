@@ -11,7 +11,11 @@ from .correlation_mkl import correlation
 MEMFACTOR = 17
 LOGFILE = "/tmp/iterative_correlation.log"
 
-logging.basicConfig(filename=LOGFILE, filemode="w", level=logging.INFO)
+try:
+    logging.basicConfig(filename=LOGFILE, filemode="w", level=logging.INFO)
+except PermissionError:
+    logging.basicConfig(level=logging.INFO)
+    logging.warning(f"Could not open {LOGFILE} for logging")
 
 
 def get_nsplits(dset: h5py.Dataset, stride: int) -> int:
@@ -372,7 +376,7 @@ class XdUCorr(IterativeCorrelation):
 
     def __init__(
         self,
-            kbt: Optional[float] = None,
+        kbt: Optional[float] = None,
         nbins: Optional[int] = None,
         trunc: Optional[int] = None,
         interpolation: Optional[str] = "linear",
@@ -428,7 +432,9 @@ class XdUCorr(IterativeCorrelation):
         if self.interpolation == "linear":
             self.config.pmf = gle_sim.LinearInterpolation(values=fe[0], fe=fe[1])
         elif self.interpolation == "splines":
-            self.config.pmf = gle_sim.CubicSplineInterpolation.from_values_fe(values=fe[0], fe=fe[1])
+            self.config.pmf = gle_sim.CubicSplineInterpolation.from_values_fe(
+                values=fe[0], fe=fe[1]
+            )
         else:
             raise ValueError(f"Unknown interpolation method {self.interpolation}")
 
