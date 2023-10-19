@@ -165,7 +165,7 @@ class IterativeCorrelation:
         self.conv_func_1 = conv_func_1
         self.conv_func_2 = conv_func_2
         self.hook_data = hook_data
-        self.sum_corr = np.zeros(trunc)
+        self.sum_corr = None
         self.corrs = []
         self.keep_corrs = keep_corrs
         self.len_datas = []
@@ -176,7 +176,7 @@ class IterativeCorrelation:
             return data1[::stride]
         out = self.conv_func_1(data1[::stride])
         if not isinstance(out, (type(None), np.ndarray)):
-            raise ValueError(f"conv_func21 does not return a numpy array or None")
+            raise ValueError("conv_func21 does not return a numpy array or None")
         return out
 
     def convert_data_2(self, data1, data2, stride):
@@ -195,16 +195,19 @@ class IterativeCorrelation:
             return input_for_func[::stride]
         out = self.conv_func_2(input_for_func[::stride])
         if not isinstance(out, (type(None), np.ndarray)):
-            raise ValueError(f"conv_func2 does not return a numpy array or None")
+            raise ValueError("conv_func2 does not return a numpy array or None")
         return out
 
     def add_corr(self, corr, len_data):
         """Add a correlation that was computed. Check if trunc is correct,
         if not, adjust. Keep corr for plotting if keep_corrs is True.
         """
-        if len(corr) < self.trunc:
+        if not self.trunc or len(corr) < self.trunc:
             self.trunc = len(corr)
-            self.corrs = [corr[: self.trunc] for corr in self.corrs]
+            if self.sum_corr is None:
+                self.sum_corr = np.zeros(self.trunc)
+            else:
+                raise ValueError("Tried to add a correlation with a different shape than before")
         self.sum_corr = self.sum_corr[: self.trunc] + len_data * corr[: self.trunc]
         if self.keep_corrs:
             self.corrs.append(corr[: self.trunc])
@@ -383,11 +386,13 @@ class XdUCorr(IterativeCorrelation):
         dt: Union[float, int] = 1.0,
         keep_corrs: bool = False,
         stride: int = 1,
+        check_nan: bool = False,
     ):
         self.dteff = dt * stride
         self._kbt = kbt
         self._nbins = nbins
         self.interpolation = interpolation
+        self.check_nan = check_nan
         self.config = None
         self.mean_du = ComputeMean()
         super().__init__(
@@ -417,7 +422,14 @@ class XdUCorr(IterativeCorrelation):
         """Compute the gradient of the pmf with gle_sim."""
         if self.config is None:
             raise ValueError("No config set for XdUCorr to compute dU")
-        return -gle_sim.get_force_pmf(self.config, x)
+        du = -gle_sim.get_force_pmf(self.config, x)
+        if not self.check_nan:
+            return du
+        num_nans = np.isnan(du).sum()
+        if num_nans > 0:
+            print(f"WARNING: found n={num_nans} NaNs in dU, setting them to 0.")
+            du[np.isnan(du)] = 0.0
+        return du
 
     def set_fe(self, fe: np.ndarray) -> None:
         """Set the free energy. Always use linear interpolation for fe to compute dU.
