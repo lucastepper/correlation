@@ -322,7 +322,7 @@ class VVCorr(IterativeCorrelation):
         """
         if dt is None and gradient_func is None:
             raise ValueError("Either dt or gradient_func must be set")
-        elif dt is None:
+        if dt is None:
             self.dteff = 1.0
         else:
             self.dteff = dt * stride
@@ -366,6 +366,7 @@ class XdUCorr(IterativeCorrelation):
     the gradient of the pmf. By default, computes dU with gle_sim:
     https://github.com/lucastepper/gle_sim.
     Arguments:
+        fe (Optional[np.ndarray]): free energy (values, fe). Shape (2, nbins).
         kbt (Optional[float]): temperature times Boltzmann constant.
         nbins (Optional[int]): number of bins for pmf. Defaults to None.
         trunc (Optional[int]): truncation of correlation. Defaults to None (no truncation).
@@ -379,6 +380,7 @@ class XdUCorr(IterativeCorrelation):
 
     def __init__(
         self,
+        fe: Optional[np.ndarray] = None,
         kbt: Optional[float] = None,
         nbins: Optional[int] = None,
         trunc: Optional[int] = None,
@@ -403,6 +405,7 @@ class XdUCorr(IterativeCorrelation):
             stride=stride,
             keep_corrs=keep_corrs,
         )
+        self.set_fe(fe)
 
     @property
     def kbt(self) -> float:
