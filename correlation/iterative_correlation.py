@@ -165,10 +165,37 @@ class IterativeCorrelation:
         self.conv_func_1 = conv_func_1
         self.conv_func_2 = conv_func_2
         self.hook_data = hook_data
-        self.sum_corr = None
+        self._sum_corr = None
         self.corrs = []
         self.keep_corrs = keep_corrs
         self.len_datas = []
+
+    @property
+    def sum_corr(self) -> np.ndarray:
+        """Get array to store sum of correlations (len(self.trunc)). Init to zeros if None.
+        Raise error if self.trunc is not set.
+        """
+        if self._sum_corr is None:
+            if self.trunc is None:
+                raise ValueError("trunc must not be None to get sum_corr")
+            self._sum_corr = np.zeros(self.trunc)
+        return self._sum_corr
+
+    @sum_corr.setter
+    def sum_corr(self, value: np.ndarray) -> None:
+        """Set self.sum_corr to value."""
+        self._sum_corr = value
+
+    def get_trunc(self, data1, data2):
+        """Get the truncation of the correlation function."""
+        if data2 is not None and len(data1) != len(data2):
+            raise ValueError(f"Tried adding data, {len(data1)=} != {len(data2)=}")
+        if self.trunc is None:
+            self.trunc = len(data1)
+            return len(data1)
+        if len(data1) < self.trunc:
+            raise ValueError(f"Tried adding data, {len(data1)=} < {self.trunc=}")
+        return self.trunc
 
     def convert_data_1(self, data1, stride):
         """Check if we defined a conversion function for data1, if so, apply it."""
@@ -198,19 +225,13 @@ class IterativeCorrelation:
             raise ValueError("conv_func2 does not return a numpy array or None")
         return out
 
-    def add_corr(self, corr, len_data):
+    def add_corr(self, corr: np.ndarray, len_data: int, trunc: int):
         """Add a correlation that was computed. Check if trunc is correct,
         if not, adjust. Keep corr for plotting if keep_corrs is True.
         """
-        if not self.trunc or len(corr) < self.trunc:
-            self.trunc = len(corr)
-            if self.sum_corr is None:
-                self.sum_corr = np.zeros(self.trunc)
-            else:
-                raise ValueError("Tried to add a correlation with a different shape than before")
-        self.sum_corr = self.sum_corr[: self.trunc] + len_data * corr[: self.trunc]
+        self.sum_corr = self.sum_corr[:trunc] + len_data * corr[:trunc]
         if self.keep_corrs:
-            self.corrs.append(corr[: self.trunc])
+            self.corrs.append(corr[:trunc])
         self.len_datas.append(len_data)
 
     def add_data(
@@ -243,11 +264,12 @@ class IterativeCorrelation:
         for dat1, dat2 in zip(data1, data2):
             conv_dat1 = self.convert_data_1(dat1, stride)
             conv_dat2 = self.convert_data_2(dat1, dat2, stride)
+            trunc = self.get_trunc(conv_dat1, conv_dat2)
             self.hook_data(conv_dat1, conv_dat2)
-            corr = correlation(conv_dat1, conv_dat2, self.trunc)
+            corr = correlation(conv_dat1, conv_dat2, trunc)
             # use len(conv_dat1) instead of len(dat1) to account for striding and possible
             # change of shape due to conversion
-            self.add_corr(corr, len(conv_dat1))
+            self.add_corr(corr, len(conv_dat1), trunc)
 
     def add_data_h5(self, dset: h5py.Dataset, nsplits: Optional[int] = None):
         """Add data from h5py.Dataset bit by bit and stride it. For now,
@@ -502,6 +524,7 @@ class XdUCorr(IterativeCorrelation):
         return self.mean_du.get_result()
 
     def plot(self, axes=None, color=None):
+        """Plot results."""
         axes = super().plot(axes, self.dteff, color=color)
         axes.set(xlabel=r"$t$ [nm/ps]", ylabel=r"$C^{x \nabla U}$ [kJ/mol]")
         return axes
