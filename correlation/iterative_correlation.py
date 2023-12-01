@@ -427,7 +427,8 @@ class XdUCorr(IterativeCorrelation):
             stride=stride,
             keep_corrs=keep_corrs,
         )
-        self.set_fe(fe)
+        if fe is not None:
+            self.set_fe(fe)
 
     @property
     def kbt(self) -> float:

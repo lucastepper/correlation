@@ -117,7 +117,7 @@ class ConditionalCorrelationFFT:
             self.cond_fft_sum = self.cond_fft_sum[: self.ncorr, :]
 
     def precheck_add_data(self, data1: np.ndarray, data2: np.ndarray, cond: np.ndarray):
-        """ Check that the dims of all trajs are 1, check that all trajs are longer than self.ncorr
+        """Check that the dims of all trajs are 1, check that all trajs are longer than self.ncorr
         or else shorten self.ncorr finally check that all trajs have same length.
         """
         if data1.ndim != 1 or data2.ndim != 1 or cond.ndim != 1:
@@ -129,10 +129,10 @@ class ConditionalCorrelationFFT:
             self.check_traj_length(traj)
         if len(data1) != len(data2) or len(data1) != len(cond):
             raise ValueError(
-                f"Trajs need to have same length, but found {len(data1)=}, {len(data2)=}, {len(cond)=}"
+                f"Trajs need same length, but found {len(data1)=}, {len(data2)=}, {len(cond)=}"
             )
 
-    def add_data(self, data1: np.ndarray, data2: np.ndarray, cond: np.ndarray):
+    def add_data(self, data1: np.ndarray, data2: np.ndarray, cond: np.ndarray, pbar=None):
         """Compute conditional correlation using FFT, by multipling with indicator
         functions for each bin at time t(0). Assumes that input data is 1-dimensional.
         """
@@ -140,7 +140,13 @@ class ConditionalCorrelationFFT:
         # compute conditional correlation
         cond_corr = np.zeros((self.ncorr, self.nbins))
         counts = np.zeros((1, self.nbins))
-        for ibin in tqdm.tqdm(range(self.nbins), disable=not self.verbose, leave=False):
+        # check if we need to use pbar or it was provided
+        if pbar is None:
+            iterator = tqdm.tqdm(range(self.nbins), disable=not self.verbose, leave=False)
+        else:
+            iterator = range(self.nbins)
+        # iterate over bins
+        for ibin in iterator:
             if self.cond_start:
                 cdata1, count = get_cond_data(data1, cond, ibin, self.dx, self.start)
                 cdata2 = data2
@@ -153,10 +159,14 @@ class ConditionalCorrelationFFT:
                 norm = np.nan
             cond_corr[:, ibin] = norm * correlation(cdata1, cdata2, trunc=self.ncorr)
             counts[:, ibin] = count
+            if pbar is not None:
+                pbar.update(1)
         self.counts_sum += counts
         self.cond_fft_sum += counts * cond_corr
 
-    def add_data_cuda(self, data1: np.ndarray, data2: np.ndarray, cond: np.ndarray, dtype=torch.float32):
+    def add_data_cuda(
+        self, data1: np.ndarray, data2: np.ndarray, cond: np.ndarray, dtype=torch.float32, pbar=None
+    ):
         """Compute conditional correlation using FFT on gpu with torch, by multipling with indicator
         functions for each bin at time t(0). Assumes that input data is 1-dimensional.
         """
@@ -174,7 +184,13 @@ class ConditionalCorrelationFFT:
         # output arrays
         cond_corr = torch.zeros((self.ncorr, self.nbins), dtype=dtype, device="cuda")
         counts = torch.zeros((1, self.nbins), dtype=dtype, device="cuda")
-        for ibin in tqdm.tqdm(range(self.nbins), disable=not self.verbose, leave=False):
+        # check if we need to use pbar or it was provided
+        if pbar is None:
+            iterator = tqdm.tqdm(range(self.nbins), disable=not self.verbose, leave=False)
+        else:
+            iterator = range(self.nbins)
+        # iterate over bins
+        for ibin in iterator:
             temp_array.fill_(0)
             if self.cond_start:
                 temp_array[idxs == ibin] = data1[idxs == ibin]
@@ -190,10 +206,14 @@ class ConditionalCorrelationFFT:
             else:
                 norm = np.nan
             # norm = torch.tensor(norm, dtype=dtype, device="cuda")
-            corr = correlation_torch(cdata1, cdata2, trunc=self.ncorr, dtype=dtype, device="cuda", device_out="cuda")
+            corr = correlation_torch(
+                cdata1, cdata2, trunc=self.ncorr, dtype=dtype, device="cuda", device_out="cuda"
+            )
             # print(corr.dtype, corr.device)
             cond_corr[:, ibin] = norm * corr
             counts[:, ibin] = count
+            if pbar is not None:
+                pbar.update(1)
         self.counts_sum += counts.cpu().numpy()
         self.cond_fft_sum += (counts * cond_corr).cpu().numpy()
 
