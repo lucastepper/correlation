@@ -379,7 +379,7 @@ class VVCorr(IterativeCorrelation):
 
     def plot(self, axes=None, color=None):
         axes = super().plot(axes, self.dteff, color=color)
-        axes.set(xlabel=r"$t$ [nm/ps]", ylabel=r"$C^{vv}$ [nm$^2$/ps$^2$]")
+        axes.set(xlabel=r"$t$ [ps]", ylabel=r"$C^{vv}$ [nm$^2$/ps$^2$]")
         return axes
 
 
@@ -469,6 +469,9 @@ class XdUCorr(IterativeCorrelation):
         self.config = gle_sim.Config.default()
         if self.interpolation == "linear":
             self.config.pmf = gle_sim.LinearInterpolation(values=fe[0], fe=fe[1])
+            # interpolate once to see if we get an error when the value of grad(fe) at
+            # the boundaries does not have the right sign
+            _ = gle_sim.get_force_pmf(self.config, np.array([0.0, 1.0]))
         elif self.interpolation == "splines":
             self.config.pmf = gle_sim.CubicSplineInterpolation.from_values_fe(
                 values=fe[0], fe=fe[1]
@@ -527,5 +530,52 @@ class XdUCorr(IterativeCorrelation):
     def plot(self, axes=None, color=None):
         """Plot results."""
         axes = super().plot(axes, self.dteff, color=color)
-        axes.set(xlabel=r"$t$ [nm/ps]", ylabel=r"$C^{x \nabla U}$ [kJ/mol]")
+        axes.set(xlabel=r"$t$ [ps]", ylabel=r"$C^{x \nabla U}$ [kJ/mol]")
+        return axes
+
+
+class XmfXmfCorr(IterativeCorrelation):
+    """Compute the time auto-correlation function of the mean-free positions
+    by substracting the mean when the positions are added."""
+
+    def __init__(
+        self,
+        dt: Optional[Union[float, int]] = None,
+        trunc: Optional[int] = None,
+        stride: int = 1,
+        keep_corrs: bool = False,
+    ):
+        """Constructor for mean-free position autocorrelation function.
+        Arguments:
+            dt (Union[float, int]): time step of data. Time step is multiplied by stride
+                to compute the effective time step, which is used to compute the velocities.
+            trunc (Optional[int]): truncation of correlation. Defaults to None (no truncation).
+            stride (int): stride for iterating over data. Defaults to 1.
+            keep_corrs (bool): keep all correlations for plotting. Defaults to False.
+        """
+        if dt is None:
+            self.dteff = 1.0
+        else:
+            self.dteff = dt * stride
+        super().__init__(
+            conv_func_1=lambda x: x - np.mean(x),
+            conv_func_2=lambda x: x - np.mean(x),
+            trunc=trunc,
+            stride=stride,
+            keep_corrs=keep_corrs,
+        )
+
+    def add_data(self, pos: np.ndarray, stride: Optional[int] = None):
+        """Add position data to XmfXmfCorr.
+        Arguments:
+            positions (np.ndarray (ntrajs, nsteps,) or (nsteps,): position data.
+            stride (Optional[int]): Allow for overriding self.stride. Defaults to None.
+                Overriding of self.stride is useful when adding data from h5py.Dataset,
+                where we already stride while iterating in iter_chunks.
+        """
+        super().add_data(pos, None, stride=stride)
+
+    def plot(self, axes=None, color=None):
+        axes = super().plot(axes, self.dteff, color=color)
+        axes.set(xlabel=r"$t$ [ps]", ylabel=r"$C^{xx}$ [nm$^2$]")
         return axes

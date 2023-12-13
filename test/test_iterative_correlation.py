@@ -33,7 +33,7 @@ def gen_test_data(steps, dt, return_du=False):
     config.steps = steps
     config.dt = dt
     config.pmf = gle_sim.Harmonic(k=45.0)
-    config.kernel = gle_sim.Exponential(ks=[400.0], gammas=[100.0])
+    config.kernel = gle_sim.Exponential(taus=[0.25], gammas=[100.0])
     config.integrator = "RungeKutta4"
     config.kbt = KBT
     config.seed = np.random.randint(0, int(2 ** 32 - 1))
