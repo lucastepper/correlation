@@ -468,7 +468,7 @@ class XdUCorr(IterativeCorrelation):
             raise ValueError(f"fe must have shape (2, nbins), got {fe.shape}")
         self.config = gle_sim.Config.default()
         if self.interpolation == "linear":
-            self.config.pmf = gle_sim.LinearInterpolation(values=fe[0], fe=fe[1])
+            self.config.pmf = gle_sim.LinearInterpolation(values=fe[0], fe=fe[1], check_grad=False)
             # interpolate once to see if we get an error when the value of grad(fe) at
             # the boundaries does not have the right sign
             _ = gle_sim.get_force_pmf(self.config, np.array([0.0, 1.0]))
