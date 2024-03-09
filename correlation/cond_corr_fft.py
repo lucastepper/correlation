@@ -153,12 +153,13 @@ class ConditionalCorrelationFFT:
             else:
                 cdata2, count = get_cond_data(data2, cond, ibin, self.dx, self.start)
                 cdata1 = data1
+            # only update the bin if we have found any data
             if count > 0:
                 norm = len(data1) / count
+                cond_corr[:, ibin] = norm * correlation(cdata1, cdata2, trunc=self.ncorr)
+                counts[:, ibin] = count
             else:
-                norm = np.nan
-            cond_corr[:, ibin] = norm * correlation(cdata1, cdata2, trunc=self.ncorr)
-            counts[:, ibin] = count
+                pass
             if pbar is not None:
                 pbar.update(1)
         self.counts_sum += counts
@@ -201,17 +202,14 @@ class ConditionalCorrelationFFT:
                 cdata1 = data1
                 cdata2 = temp_array
             count = torch.sum(idxs == ibin)
+            # only update the bin if we have found any data
             if count > 0:
                 norm = len(data1) / count
-            else:
-                norm = np.nan
-            # norm = torch.tensor(norm, dtype=dtype, device="cuda")
-            corr = correlation_torch(
-                cdata1, cdata2, trunc=self.ncorr, dtype=dtype, device="cuda", device_out="cuda"
-            )
-            # print(corr.dtype, corr.device)
-            cond_corr[:, ibin] = norm * corr
-            counts[:, ibin] = count
+                corr = correlation_torch(
+                    cdata1, cdata2, trunc=self.ncorr, dtype=dtype, device="cuda", device_out="cuda"
+                )
+                cond_corr[:, ibin] = norm * corr
+                counts[:, ibin] = count
             if pbar is not None:
                 pbar.update(1)
         self.counts_sum += counts.cpu().numpy()
