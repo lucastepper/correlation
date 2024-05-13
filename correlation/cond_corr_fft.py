@@ -35,20 +35,24 @@ class ConditionalCorrelationFFT:
     functions via FFT.
     Arguments:
         ----------
-        ncorr: int Number of correlation points to compute.
+        trunc: int Number of correlation points to compute.
         intervals: np.ndarray Array of shape (nintervals) with the start and end of each interval.
         cond_start: bool, If True, the conditional correlation is conditioned on x[0],
             if False, it is conditioned on x[tcorr].
         verbose: bool, If True, print progress bar.
     Computes:
         ----------
-        conditional correlation (ncorr, np.ndarray(len(intervals - 1)))
+        conditional correlation (trunc, np.ndarray(len(intervals - 1)))
     """
 
     def __init__(
-        self, ncorr: int, intervals: np.ndarray, cond_start: bool = True, verbose: bool = True
+        self,
+        trunc: int,
+        intervals: np.ndarray,
+        cond_start: bool = True,
+        verbose: bool = True,
     ) -> None:
-        self.ncorr = ncorr
+        self.trunc = trunc
         self.intervals = intervals
         self.nintervals = intervals.shape[0]
         self.start = intervals[0]
@@ -57,7 +61,7 @@ class ConditionalCorrelationFFT:
         self.cond_start = cond_start
         self.verbose = verbose
         self.counts_sum = np.zeros((1, self.nbins))
-        self.cond_fft_sum = np.zeros((self.ncorr, self.nbins))
+        self.cond_fft_sum = np.zeros((self.trunc, self.nbins))
 
     @classmethod
     def from_dx(
@@ -65,7 +69,7 @@ class ConditionalCorrelationFFT:
         dx: float,
         nbins: int,
         start: float,
-        ncorr: int,
+        trunc: int,
         cond_start: bool = True,
         verbose: bool = True,
     ):
@@ -74,7 +78,7 @@ class ConditionalCorrelationFFT:
             dx: float, Width of the intervals for the cond corr.
             nbins: int, Number of bins for cond_corr (Meaning nbins + 1 intervals).
             start: float, Left-most inverval edge.
-            ncorr: int, Number of correlation points to compute.
+            trunc: int, Number of correlation points to compute.
             cond_start: bool, If True, the conditional correlation is conditioned on x[0],
                 if False, it is conditioned on x[tcorr].
             verbose: bool, If True, print progress bar.
@@ -82,14 +86,14 @@ class ConditionalCorrelationFFT:
             ConditionalCorrelationFFT
         """
         intervals = np.arange(nbins + 1) * dx + start
-        return cls(ncorr, intervals, cond_start=cond_start, verbose=verbose)
+        return cls(trunc, intervals, cond_start=cond_start, verbose=verbose)
 
     @classmethod
     def from_range(
         cls,
         nbins: int,
         traj_range: tuple[Union[float, int]],
-        ncorr: int,
+        trunc: int,
         cond_start: bool = True,
         verbose: bool = True,
     ):
@@ -97,8 +101,7 @@ class ConditionalCorrelationFFT:
         Arguments:
             nbins: int, Number of bins for cond_corr (Meaning nbins + 1 intervals).
             traj_range: [float; 2], Left-most and right-most inverval edge.
-            ncorr: int, Number of correlation points to compute.
-            ncorr: int, Number of correlation points to compute.
+            trunc: int, Number of correlation points to compute.
             cond_start: bool, If True, the conditional correlation is conditioned on x[0],
                 if False, it is conditioned on x[tcorr].
             verbose: bool, If True, print progress bar.
@@ -106,25 +109,25 @@ class ConditionalCorrelationFFT:
             ConditionalCorrelationFFT
         """
         intervals = np.linspace(*traj_range, nbins + 1)
-        return cls(ncorr, intervals, cond_start=cond_start, verbose=verbose)
+        return cls(trunc, intervals, cond_start=cond_start, verbose=verbose)
 
     def check_traj_length(self, traj):
-        """Check that is the trajectory is at least as long as self.ncorr.
-        If not, shorten self.ncorr and self.cond_fft_sum.
+        """Check that is the trajectory is at least as long as self.trunc.
+        If not, shorten self.trunc and self.cond_fft_sum.
         """
-        if len(traj) < self.ncorr:
-            self.ncorr = len(traj)
-            self.cond_fft_sum = self.cond_fft_sum[: self.ncorr, :]
+        if len(traj) < self.trunc:
+            self.trunc = len(traj)
+            self.cond_fft_sum = self.cond_fft_sum[: self.trunc, :]
 
     def precheck_add_data(self, data1: np.ndarray, data2: np.ndarray, cond: np.ndarray):
-        """Check that the dims of all trajs are 1, check that all trajs are longer than self.ncorr
-        or else shorten self.ncorr finally check that all trajs have same length.
+        """Check that the dims of all trajs are 1, check that all trajs are longer than self.trunc
+        or else shorten self.trunc finally check that all trajs have same length.
         """
         if data1.ndim != 1 or data2.ndim != 1 or cond.ndim != 1:
             raise ValueError(
                 f"Data must be 1-dimensional, but found {data1.ndim=}, {data2.ndim=}, {cond.ndim=}"
             )
-        # shorten self.ncorr and self.cond_fft_sum if traj is too short
+        # shorten self.trunc and self.cond_fft_sum if traj is too short
         for traj in [data1, data2, cond]:
             self.check_traj_length(traj)
         if len(data1) != len(data2) or len(data1) != len(cond):
@@ -132,17 +135,21 @@ class ConditionalCorrelationFFT:
                 f"Trajs need same length, but found {len(data1)=}, {len(data2)=}, {len(cond)=}"
             )
 
-    def add_data(self, data1: np.ndarray, data2: np.ndarray, cond: np.ndarray, pbar=None):
+    def add_data(
+        self, data1: np.ndarray, data2: np.ndarray, cond: np.ndarray, pbar=None
+    ):
         """Compute conditional correlation using FFT, by multipling with indicator
         functions for each bin at time t(0). Assumes that input data is 1-dimensional.
         """
         self.precheck_add_data(data1, data2, cond)
         # compute conditional correlation
-        cond_corr = np.zeros((self.ncorr, self.nbins))
+        cond_corr = np.zeros((self.trunc, self.nbins))
         counts = np.zeros((1, self.nbins))
         # check if we need to use pbar or it was provided
         if pbar is None:
-            iterator = tqdm.tqdm(range(self.nbins), disable=not self.verbose, leave=False)
+            iterator = tqdm.tqdm(
+                range(self.nbins), disable=not self.verbose, leave=False
+            )
         else:
             iterator = range(self.nbins)
         # iterate over bins
@@ -156,7 +163,9 @@ class ConditionalCorrelationFFT:
             # only update the bin if we have found any data
             if count > 0:
                 norm = len(data1) / count
-                cond_corr[:, ibin] = norm * correlation(cdata1, cdata2, trunc=self.ncorr)
+                cond_corr[:, ibin] = norm * correlation(
+                    cdata1, cdata2, trunc=self.trunc
+                )
                 counts[:, ibin] = count
             else:
                 pass
@@ -166,7 +175,12 @@ class ConditionalCorrelationFFT:
         self.cond_fft_sum += counts * cond_corr
 
     def add_data_cuda(
-        self, data1: np.ndarray, data2: np.ndarray, cond: np.ndarray, dtype=torch.float32, pbar=None
+        self,
+        data1: np.ndarray,
+        data2: np.ndarray,
+        cond: np.ndarray,
+        dtype=torch.float32,
+        pbar=None,
     ):
         """Compute conditional correlation using FFT on gpu with torch, by multipling with indicator
         functions for each bin at time t(0). Assumes that input data is 1-dimensional.
@@ -183,11 +197,13 @@ class ConditionalCorrelationFFT:
         temp_array = torch.zeros_like(data1)
 
         # output arrays
-        cond_corr = torch.zeros((self.ncorr, self.nbins), dtype=dtype, device="cuda")
+        cond_corr = torch.zeros((self.trunc, self.nbins), dtype=dtype, device="cuda")
         counts = torch.zeros((1, self.nbins), dtype=dtype, device="cuda")
         # check if we need to use pbar or it was provided
         if pbar is None:
-            iterator = tqdm.tqdm(range(self.nbins), disable=not self.verbose, leave=False)
+            iterator = tqdm.tqdm(
+                range(self.nbins), disable=not self.verbose, leave=False
+            )
         else:
             iterator = range(self.nbins)
         # iterate over bins
@@ -206,7 +222,12 @@ class ConditionalCorrelationFFT:
             if count > 0:
                 norm = len(data1) / count
                 corr = correlation_torch(
-                    cdata1, cdata2, trunc=self.ncorr, dtype=dtype, device="cuda", device_out="cuda"
+                    cdata1,
+                    cdata2,
+                    trunc=self.trunc,
+                    dtype=dtype,
+                    device="cuda",
+                    device_out="cuda",
                 )
                 cond_corr[:, ibin] = norm * corr
                 counts[:, ibin] = count
@@ -218,6 +239,61 @@ class ConditionalCorrelationFFT:
     def get_result(self):
         """Gather the resulting conditional correlation function from all data added.
         Returns:
-            cond_corr (np.ndarray(ncorr, nbins)): The conditional correlation function.
+            cond_corr (np.ndarray(trunc, nbins)): The conditional correlation function.
         """
         return self.cond_fft_sum / self.counts_sum
+
+
+def correlation_2d(
+    data1: np.ndarray,
+    data2: np.ndarray,
+    cond_data: np.ndarray,
+    intervals: np.ndarray,
+    trunc: int,
+    cond_start: bool = True,
+    device: str = "cpu",
+):
+    """Compute 2d correlation function for a 1d data or a set of 1d datas.
+    Arguments:
+        data1 np.ndarray(ntrajs, nframes) or np.ndarray(nframes): The first data to correlate.
+        data2 np.ndarray(ntrajs, nframes) or np.ndarray(nframes): The second data to correlate.
+        cond_data np.ndarray(ntrajs, nframes) or np.ndarray(nframes): The data to condition on.
+        intervals np.ndarray(nbins + 1): The intervals in which to compute the cond correlations.
+        trunc int: The number of correlation points to compute.
+        cond_start bool: If True, the conditional correlation is conditioned on data1, else data2
+        device str: The device to use, either "cpu" or "cuda".
+    Returns:
+        cond_corr np.ndarray(trunc, nbins): The conditional correlation function.
+    """
+    # check shapes and cast to numpy array
+    data1 = np.array(data1)
+    if data1.ndim == 1:
+        data1 = data1[np.newaxis, :]
+    if data1.ndim != 2:
+        raise ValueError(f"{data1=} must be 1 or 2-dimensional")
+    data2 = np.array(data2)
+    if data2.ndim == 1:
+        data2 = data2[np.newaxis, :]
+    if data2.ndim != 2:
+        raise ValueError(f"{data2=} must be 1 or 2-dimensional")
+    cond_data = np.array(cond_data)
+    if cond_data.ndim == 1:
+        cond_data = cond_data[np.newaxis, :]
+    if cond_data.ndim != 2:
+        raise ValueError(f"{cond_data=} must be 1 or 2-dimensional")
+    intervals = np.array(intervals)
+    if intervals.ndim != 1:
+        raise ValueError(f"{intervals=} must be 1-dimensional")
+
+    # build ConditionalCorrelationFFT object
+    cond_corr_obj = ConditionalCorrelationFFT(
+        trunc, intervals, cond_start=cond_start, verbose=False
+    )
+    # add data
+    for dat1, dat2, cond in zip(data1, data2, cond_data):
+        if device == "cpu":
+            cond_corr_obj.add_data(dat1, dat2, cond, pbar=None)
+        elif device == "cuda":
+            cond_corr_obj.add_data_cuda(dat1, dat2, cond, pbar=None)
+
+    return cond_corr_obj.get_result()

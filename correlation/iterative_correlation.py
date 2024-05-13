@@ -420,7 +420,7 @@ class XdUCorr(IterativeCorrelation):
         self.config = None
         self.mean_du = ComputeMean()
         super().__init__(
-            conv_func_1=lambda x: x,
+            conv_func_1=lambda x: x.astype(np.float64),
             conv_func_2=self.get_du,
             hook_data=lambda _x, du: self.mean_du.add_data(du),
             trunc=trunc,
@@ -448,7 +448,7 @@ class XdUCorr(IterativeCorrelation):
         """Compute the gradient of the pmf with gle_sim."""
         if self.config is None:
             raise ValueError("No config set for XdUCorr to compute dU")
-        du = -gle_sim.get_force_pmf(self.config, x)
+        du = -gle_sim.get_force_pmf(self.config, x.astype(np.float64))
         if not self.check_nan:
             return du
         num_nans = np.isnan(du).sum()
