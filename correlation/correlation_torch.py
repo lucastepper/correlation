@@ -1,11 +1,6 @@
 from typing import Optional, Union
 import numpy as np
-
-# allow for optional torch import
-try:
-    import torch
-except ImportError:
-    pass
+import torch
 
 
 def string_to_torch_dtype(data_type_str: Union[str, torch.dtype]) -> torch.dtype:
