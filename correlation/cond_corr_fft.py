@@ -20,13 +20,15 @@ def get_index(x, x_min, dx):
 def get_cond_data(data, cond, ibin, dx, x_min):
     """Zero all frames of data that are not in the ibin-th bin."""
     cond_data = np.zeros_like(data)
+    indicator = np.zeros(len(data), dtype=np.float64)
     count = 0
     for i in range(len(data)):
         idx = get_index(cond[i], x_min, dx)
         if idx == ibin:
             cond_data[i] = data[i]
+            indicator[i] = 1.0
             count += 1
-    return cond_data, count
+    return cond_data, indicator, count
 
 
 class ConditionalCorrelationFFT:
@@ -60,7 +62,7 @@ class ConditionalCorrelationFFT:
         self.dx = intervals[1] - intervals[0]
         self.cond_start = cond_start
         self.verbose = verbose
-        self.counts_sum = np.zeros((1, self.nbins))
+        self.counts_sum = np.zeros((self.trunc, self.nbins))
         self.cond_fft_sum = np.zeros((self.trunc, self.nbins))
 
     @classmethod
@@ -117,6 +119,7 @@ class ConditionalCorrelationFFT:
         """
         if len(traj) < self.trunc:
             self.trunc = len(traj)
+            self.counts_sum = self.counts_sum[: self.trunc, :]
             self.cond_fft_sum = self.cond_fft_sum[: self.trunc, :]
 
     def precheck_add_data(self, data1: np.ndarray, data2: np.ndarray, cond: np.ndarray):
@@ -143,8 +146,10 @@ class ConditionalCorrelationFFT:
         """
         self.precheck_add_data(data1, data2, cond)
         # compute conditional correlation
-        cond_corr = np.zeros((self.trunc, self.nbins))
-        counts = np.zeros((1, self.nbins))
+        cond_sums = np.zeros((self.trunc, self.nbins))
+        counts = np.zeros((self.trunc, self.nbins))
+        lag_counts = np.linspace(len(data1), len(data1) - self.trunc + 1, self.trunc)
+        ones = np.ones(len(data1), dtype=np.float64)
         # check if we need to use pbar or it was provided
         if pbar is None:
             iterator = tqdm.tqdm(
@@ -155,24 +160,27 @@ class ConditionalCorrelationFFT:
         # iterate over bins
         for ibin in iterator:
             if self.cond_start:
-                cdata1, count = get_cond_data(data1, cond, ibin, self.dx, self.start)
+                cdata1, indicator, count = get_cond_data(
+                    data1, cond, ibin, self.dx, self.start
+                )
                 cdata2 = data2
+                count_corr = correlation(indicator, ones, trunc=self.trunc)
             else:
-                cdata2, count = get_cond_data(data2, cond, ibin, self.dx, self.start)
+                cdata2, indicator, count = get_cond_data(
+                    data2, cond, ibin, self.dx, self.start
+                )
                 cdata1 = data1
+                count_corr = correlation(ones, indicator, trunc=self.trunc)
             # only update the bin if we have found any data
             if count > 0:
-                norm = len(data1) / count
-                cond_corr[:, ibin] = norm * correlation(
-                    cdata1, cdata2, trunc=self.trunc
+                cond_sums[:, ibin] = (
+                    correlation(cdata1, cdata2, trunc=self.trunc) * lag_counts
                 )
-                counts[:, ibin] = count
-            else:
-                pass
+                counts[:, ibin] = np.rint(count_corr * lag_counts)
             if pbar is not None:
                 pbar.update(1)
         self.counts_sum += counts
-        self.cond_fft_sum += counts * cond_corr
+        self.cond_fft_sum += cond_sums
 
     def add_data_cuda(
         self,
@@ -191,14 +199,20 @@ class ConditionalCorrelationFFT:
         data1 = torch.Tensor(data1).to(dtype=dtype).cuda()
         data2 = torch.Tensor(data2).to(dtype=dtype).cuda()
         cond = torch.Tensor(cond).to(dtype=dtype).cuda()
-        if self.nbins >= 2**8:
-            raise ValueError(f"Too many bins: {self.nbins=}")
-        idxs = torch.floor((cond - self.start) / self.dx).to(dtype=torch.int8)
+        idxs = torch.floor((cond - self.start) / self.dx).to(dtype=torch.long)
         temp_array = torch.zeros_like(data1)
 
         # output arrays
-        cond_corr = torch.zeros((self.trunc, self.nbins), dtype=dtype, device="cuda")
-        counts = torch.zeros((1, self.nbins), dtype=dtype, device="cuda")
+        cond_sums = torch.zeros((self.trunc, self.nbins), dtype=dtype, device="cuda")
+        counts = torch.zeros((self.trunc, self.nbins), dtype=dtype, device="cuda")
+        lag_counts = torch.linspace(
+            len(data1),
+            len(data1) - self.trunc + 1,
+            self.trunc,
+            dtype=dtype,
+            device="cuda",
+        )
+        ones = torch.ones_like(data1)
         # check if we need to use pbar or it was provided
         if pbar is None:
             iterator = tqdm.tqdm(
@@ -209,18 +223,34 @@ class ConditionalCorrelationFFT:
         # iterate over bins
         for ibin in iterator:
             temp_array.fill_(0)
+            mask = idxs == ibin
+            indicator = mask.to(dtype=dtype)
             if self.cond_start:
-                temp_array[idxs == ibin] = data1[idxs == ibin]
+                temp_array[mask] = data1[mask]
                 cdata1 = temp_array
                 cdata2 = data2
+                count_corr = correlation_torch(
+                    indicator,
+                    ones,
+                    trunc=self.trunc,
+                    dtype=dtype,
+                    device="cuda",
+                    device_out="cuda",
+                )
             else:
-                temp_array[idxs == ibin] = data2[idxs == ibin]
+                temp_array[mask] = data2[mask]
                 cdata1 = data1
                 cdata2 = temp_array
-            count = torch.sum(idxs == ibin)
+                count_corr = correlation_torch(
+                    ones,
+                    indicator,
+                    trunc=self.trunc,
+                    dtype=dtype,
+                    device="cuda",
+                    device_out="cuda",
+                )
             # only update the bin if we have found any data
-            if count > 0:
-                norm = len(data1) / count
+            if torch.any(mask):
                 corr = correlation_torch(
                     cdata1,
                     cdata2,
@@ -229,12 +259,12 @@ class ConditionalCorrelationFFT:
                     device="cuda",
                     device_out="cuda",
                 )
-                cond_corr[:, ibin] = norm * corr
-                counts[:, ibin] = count
+                cond_sums[:, ibin] = corr * lag_counts
+                counts[:, ibin] = torch.round(count_corr * lag_counts)
             if pbar is not None:
                 pbar.update(1)
         self.counts_sum += counts.cpu().numpy()
-        self.cond_fft_sum += (counts * cond_corr).cpu().numpy()
+        self.cond_fft_sum += cond_sums.cpu().numpy()
 
     def get_result(self):
         """Gather the resulting conditional correlation function from all data added.

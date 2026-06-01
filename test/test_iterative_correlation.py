@@ -39,7 +39,7 @@ def gen_test_data(steps, dt, return_du=False):
     config.seed = np.random.randint(0, int(2 ** 32 - 1))
     traj = gle_sim.integrate(config)
     if return_du:
-        du = -gle_sim.get_force_pmf(config, traj)
+        du = -gle_sim.get_force_pmf(traj, config=config)
         return traj, du
     return traj
 

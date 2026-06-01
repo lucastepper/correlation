@@ -1,9 +1,12 @@
 # CAREFUL, right now cpu and gpu versions are different when data is not all inside range
 import math
+import importlib.util
 from numba import njit
 import numpy as np
 import pytest
 import correlation
+
+TORCH_AVAILABLE = importlib.util.find_spec("torch") is not None
 
 
 @njit
@@ -47,6 +50,13 @@ def corr(a, b, cond, ncorr, cond_start, cond_end, x_min, dx, nbins):
 )
 def test_cond_corr(threads, cond_start, cond_end, device, fft):
     """Test conditional correlation"""
+    if device == "cuda":
+        if not TORCH_AVAILABLE:
+            pytest.skip("torch is not available")
+        import torch
+
+        if not torch.cuda.is_available():
+            pytest.skip("CUDA is not available")
     np.random.seed(43)
     n = 10000
     ncorr = 20
@@ -63,7 +73,7 @@ def test_cond_corr(threads, cond_start, cond_end, device, fft):
         b = b.astype(np.float32)
     if fft:
         test_obj = correlation.ConditionalCorrelationFFT.from_range(
-            ncorr=ncorr, traj_range=tuple(range_bins), nbins=nbins, cond_start=cond_start
+            trunc=ncorr, traj_range=tuple(range_bins), nbins=nbins, cond_start=cond_start
         )
         if device == "cuda":
             test_obj.add_data_cuda(a, b, a, dtype="float64")
@@ -82,6 +92,34 @@ def test_cond_corr(threads, cond_start, cond_end, device, fft):
         atol = 1e-4
     # compare
     np.testing.assert_allclose(test_obj.get_result(), corr_ref, atol=atol)
+
+
+@pytest.mark.parametrize("cond_start, cond_end", [(True, False), (False, True)])
+def test_cond_corr_fft_uses_lag_specific_pair_counts(cond_start, cond_end):
+    """FFT conditional correlation normalizes by the actual pairs per lag/bin."""
+    a = np.array([2.0, -1.0, 3.0, 4.0, -2.0, 5.0])
+    b = np.array([1.5, 2.0, -3.0, 0.5, 4.0, -1.0])
+    cond = np.array([0.2, 1.4, 0.4, 1.6, 0.6, 0.8])
+    ncorr = 5
+    nbins = 2
+    range_bins = (0.0, 2.0)
+    dx = (range_bins[1] - range_bins[0]) / nbins
+
+    corr_ref = corr(a, b, cond, ncorr, cond_start, cond_end, range_bins[0], dx, nbins)
+    test_obj = correlation.ConditionalCorrelationFFT.from_range(
+        trunc=ncorr,
+        traj_range=range_bins,
+        nbins=nbins,
+        cond_start=cond_start,
+        verbose=False,
+    )
+    test_obj.add_data(a, b, cond)
+
+    result = test_obj.get_result()
+    result[np.isinf(result)] = np.nan
+
+    np.testing.assert_allclose(test_obj.counts_sum, np.rint(test_obj.counts_sum))
+    np.testing.assert_allclose(result, corr_ref, atol=1e-10)
 
 
 if __name__ == "__main__":

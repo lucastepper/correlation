@@ -448,7 +448,7 @@ class XdUCorr(IterativeCorrelation):
         """Compute the gradient of the pmf with gle_sim."""
         if self.config is None:
             raise ValueError("No config set for XdUCorr to compute dU")
-        du = -gle_sim.get_force_pmf(self.config, x.astype(np.float64))
+        du = -gle_sim.get_force_pmf(x.astype(np.float64), config=self.config)
         if not self.check_nan:
             return du
         num_nans = np.isnan(du).sum()
@@ -471,7 +471,7 @@ class XdUCorr(IterativeCorrelation):
             self.config.pmf = gle_sim.LinearInterpolation(values=fe[0], fe=fe[1], check_grad=False)
             # interpolate once to see if we get an error when the value of grad(fe) at
             # the boundaries does not have the right sign
-            _ = gle_sim.get_force_pmf(self.config, np.array([0.0, 1.0]))
+            _ = gle_sim.get_force_pmf(np.array([0.0, 1.0]), config=self.config)
         elif self.interpolation == "splines":
             self.config.pmf = gle_sim.CubicSplineInterpolation.from_values_fe(
                 values=fe[0], fe=fe[1]
