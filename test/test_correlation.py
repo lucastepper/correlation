@@ -1,5 +1,6 @@
 import pytest
 import numpy as np
+import torch
 from numba import njit
 from correlation import correlation, correlation_torch
 
@@ -36,7 +37,15 @@ def correlation_ref_fft(a, b, trunc, bconj=False):
     return corr
 
 
-@pytest.mark.parametrize("test_torch, device", [(False, "cpu"), (True, "cpu"), (True, "cuda")])
+cuda_only = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+correlation_devices = [
+    (False, "cpu"),
+    (True, "cpu"),
+    pytest.param(True, "cuda", marks=cuda_only),
+]
+
+
+@pytest.mark.parametrize("test_torch, device", correlation_devices)
 def test_autocorr_1d(test_torch, device):
     """Test computation of autocorrelation."""
     size = int(1e3 + 1)
@@ -54,7 +63,7 @@ def test_autocorr_1d(test_torch, device):
     np.testing.assert_allclose(data, data_copy)
 
 
-@pytest.mark.parametrize("test_torch, device", [(False, "cpu"), (True, "cpu"), (True, "cuda")])
+@pytest.mark.parametrize("test_torch, device", correlation_devices)
 def test_corr_1d(test_torch, device):
     """Test computation of correlation."""
     size = int(1e4 + 1)
@@ -76,7 +85,7 @@ def test_corr_1d(test_torch, device):
     np.testing.assert_allclose(data2, data2_copy)
 
 
-@pytest.mark.parametrize("test_torch, device", [(False, "cpu"), (True, "cpu"), (True, "cuda")])
+@pytest.mark.parametrize("test_torch, device", correlation_devices)
 def test_autocorr_2d(test_torch, device):
     """Test computation of correlation in 2d."""
     size = (3, int(1e3 + 11))
@@ -94,7 +103,7 @@ def test_autocorr_2d(test_torch, device):
     np.testing.assert_allclose(data, data_copy)
 
 
-@pytest.mark.parametrize("test_torch, device", [(False, "cpu"), (True, "cpu"), (True, "cuda")])
+@pytest.mark.parametrize("test_torch, device", correlation_devices)
 def test_corr_2d(test_torch, device):
     """Test computation of correlation in 2d."""
     size = (3, int(1e3 + 11))
