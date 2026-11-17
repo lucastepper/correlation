@@ -17,8 +17,7 @@ def mkl_res_conj_inplace(x, real_type, cmplx_type):
     Returns:
         pointer to input array"""
 
-    for i in range(len(x)):
-        x[i, 1:-1] = np.conj(x[i, 1:-1].view(cmplx_type)).view(real_type)
+    x[:, 1:-1] = np.conj(x[:, 1:-1])
     return x
 
 
@@ -38,10 +37,7 @@ def mkl_res_mult_inplace(x, y, real_type, cmplx_type):
         (x) real valued np.ndarray, output of mkl.rfft,
             written in input x"""
 
-    for i in range(len(x)):
-        x[i, 1:-1] = (x[i, 1:-1].view(cmplx_type) * y[i, 1:-1].view(cmplx_type)).view(real_type)
-    x[:, 0] *= y[:, 0]
-    x[:, -1] *= y[:, -1]
+    np.multiply(x, y, out=x)
     return x
 
 
@@ -95,22 +91,24 @@ def correlation(
     if pad_len % 1000 != 0:
         pad_len = int(pad_len + 1000 - pad_len % 1000)
     try:
-        a = mkl_fft.rfft(a, n=pad_len, axis=-1, overwrite_x=True).reshape(ndim, -1)
+        a = mkl_fft.rfft(a, n=pad_len, axis=-1).reshape(ndim, -1)
     except ValueError:
         pad_len_new = 2 ** int(np.ceil(np.log2(pad_len)))
         assert pad_len_new > pad_len
         pad_len = pad_len_new
-        a = mkl_fft.rfft(a, n=pad_len, axis=-1, overwrite_x=True).reshape(ndim, -1)
+        a = mkl_fft.rfft(a, n=pad_len, axis=-1).reshape(ndim, -1)
     # we have two distinct branches as we want to avoid copying a, but if we do
     # not have a b array, we need to
     if id(a_input) == id(b_input):
         a1 = mkl_res_conj_inplace(np.copy(a), real_type, cmplx_type)
         a = mkl_res_mult_inplace(a1, a, real_type, cmplx_type)
     else:
-        b = mkl_fft.rfft(b, n=pad_len, axis=-1, overwrite_x=True).reshape(ndim, -1)
+        b = mkl_fft.rfft(b, n=pad_len, axis=-1).reshape(ndim, -1)
         a = mkl_res_conj_inplace(a, real_type, cmplx_type)
         a = mkl_res_mult_inplace(a, b, real_type, cmplx_type)
-    a = mkl_fft.irfft(a, n=None, axis=-1, overwrite_x=True).reshape(ndim, -1)[:, :trunc]
+    inverse = np.empty((ndim, pad_len), dtype=real_type)
+    mkl_fft.irfft(a, n=pad_len, axis=-1, out=inverse)
+    a = inverse[:, :trunc]
     a /= np.linspace(len_a, len_a - trunc + 1, trunc).reshape(1, -1)
     if reshaped:
         return a.flatten()

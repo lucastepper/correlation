@@ -16,6 +16,8 @@ dependencies = [
     "numpy >= 1.15",
     "psutil >= 5.9",
     "h5py >= 3.1",
+    "mkl-fft",
+    "numba",
     # "gle_sim",
 ]
 [project.optional-dependencies]
