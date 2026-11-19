@@ -2,6 +2,8 @@
 #[macro_use]
 extern crate rustacuda;
 use pyo3::prelude::*;
+// PyO3 0.16's #[pymethods] generates nested impls in this module.
+#[allow(non_local_definitions)]
 mod cond_corr;
 #[cfg(feature = "cuda")]
 mod cond_corr_cuda;
