@@ -156,7 +156,9 @@ def test_cond_corr_fft_uses_lag_specific_pair_counts(cond_start, cond_end):
     )
     test_obj.add_data(a, b, cond)
 
-    result = test_obj.get_result()
+    # A lag/bin with no pairs can produce an infinity before the comparison.
+    with np.errstate(divide="ignore"):
+        result = test_obj.get_result()
     result[np.isinf(result)] = np.nan
 
     np.testing.assert_allclose(test_obj.counts_sum, np.rint(test_obj.counts_sum))

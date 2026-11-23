@@ -1,13 +1,13 @@
 [package]
 authors = ["lucastepper <lucas.tepper.91@gmail.com>"]
 name = "correlation"
-version = "0.1.0"
+version = "0.1.3"
 description = "Compute time correlation functions."
 readme = "README.md"
 edition = "2021"
 
 [dependencies]
-pyo3 = { version = "0.16.5", features = ["extension-module"] }
+pyo3 = { version = "0.16.5", features = ["extension-module", "abi3-py310"] }
 numpy = "0.16.2"
 ndarray = { version = "0.15.4", features = ["rayon"] }
 crossbeam = "0.8.1"

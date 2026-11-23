@@ -57,7 +57,10 @@ impl CudaKernel {
         let _previous = CurrentContext::save().map_err(cuda_error)?;
         let context = CudaContext::new(0).map_err(cuda_error)?;
         let module = context
-            .load_module(Ptx::from_src(include_str!("conditional_corr.ptx")))
+            .load_module(Ptx::from_src(include_str!(concat!(
+                env!("OUT_DIR"),
+                "/conditional_corr.ptx"
+            ))))
             .map_err(cuda_error)?;
         let function = module.load_function("cond_corr").map_err(cuda_error)?;
         let stream = context.new_stream().map_err(cuda_error)?;
