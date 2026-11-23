@@ -34,7 +34,7 @@ acf = correlation(x)                 # autocorrelation
 cross = correlation(x, np.roll(x, 1), trunc=1000)
 ```
 
-`correlation_torch` provides the same operation through PyTorch and accepts a `device` such as `"cpu"` or `"cuda"`.
+`correlation_torch` provides the same operation through PyTorch and accepts a `device` such as `"cpu"` or `"cuda"`. Install PyTorch separately with `pip install torch` to use it.
 
 ```python
 from correlation import correlation_torch
@@ -57,6 +57,7 @@ result = cc.get_result()
 The default device is CPU. CUDA device support is available only when the extension was built with the `cuda` Cargo feature.
 
 `ConditionalCorrelationFFT` accumulates conditional correlations using FFTs. Construct it with `from_range(nbins, traj_range, trunc)` or `from_dx(dx, nbins, start, trunc)`, add trajectories with `add_data(...)`, then call `get_result()`.
+Without PyTorch, `add_data_cuda(...)` issues a warning and uses `add_data(...)` on the CPU.
 
 ### Incremental HDF5 correlation
 

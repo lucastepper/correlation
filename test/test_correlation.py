@@ -1,8 +1,12 @@
 import pytest
 import numpy as np
-import torch
 from numba import njit
 from correlation import correlation, correlation_torch
+
+try:
+    import torch
+except ImportError:
+    torch = None
 
 
 @njit
@@ -37,10 +41,13 @@ def correlation_ref_fft(a, b, trunc, bconj=False):
     return corr
 
 
-cuda_only = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+torch_only = pytest.mark.skipif(torch is None, reason="PyTorch is unavailable")
+cuda_only = pytest.mark.skipif(
+    torch is None or not torch.cuda.is_available(), reason="PyTorch or CUDA is unavailable"
+)
 correlation_devices = [
     (False, "cpu"),
-    (True, "cpu"),
+    pytest.param(True, "cpu", marks=torch_only),
     pytest.param(True, "cuda", marks=cuda_only),
 ]
 

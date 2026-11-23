@@ -1,13 +1,24 @@
 import math
 import time
+import warnings
 from typing import Union
 from matplotlib import pyplot as plt
 import numpy as np
 from numba import njit
-import torch
 import tqdm
-from .correlation_torch import correlation_torch, string_to_torch_dtype
 from .correlation_mkl import correlation
+
+try:
+    import torch
+except ImportError:
+    torch = None
+
+    def correlation_torch(*args, **kwargs):
+        raise ImportError(
+            "correlation_torch requires PyTorch. Install it with 'pip install torch'."
+        )
+else:
+    from .correlation_torch import correlation_torch, string_to_torch_dtype
 
 
 @njit
@@ -187,12 +198,20 @@ class ConditionalCorrelationFFT:
         data1: np.ndarray,
         data2: np.ndarray,
         cond: np.ndarray,
-        dtype=torch.float32,
+        dtype="float32",
         pbar=None,
     ):
         """Compute conditional correlation using FFT on gpu with torch, by multipling with indicator
         functions for each bin at time t(0). Assumes that input data is 1-dimensional.
+        Falls back to add_data if PyTorch is unavailable.
         """
+        if torch is None:
+            warnings.warn(
+                "PyTorch is unavailable. Falling back to CPU conditional correlation.",
+                stacklevel=2,
+            )
+            return self.add_data(data1, data2, cond, pbar=pbar)
+
         self.precheck_add_data(data1, data2, cond)
         dtype = string_to_torch_dtype(dtype)
         # compute conditional correlation

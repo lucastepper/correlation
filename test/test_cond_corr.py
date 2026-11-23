@@ -50,7 +50,8 @@ def corr(a, b, cond, ncorr, cond_start, cond_end, x_min, dx, nbins):
 )
 def test_cond_corr(threads, cond_start, cond_end, device, fft):
     """Test conditional correlation"""
-    if device == "cuda":
+    use_cpu_fallback = device == "cuda" and fft and not TORCH_AVAILABLE
+    if device == "cuda" and not use_cpu_fallback:
         if not TORCH_AVAILABLE:
             pytest.skip("torch is not available")
         import torch
@@ -75,7 +76,10 @@ def test_cond_corr(threads, cond_start, cond_end, device, fft):
         test_obj = correlation.ConditionalCorrelationFFT.from_range(
             trunc=ncorr, traj_range=tuple(range_bins), nbins=nbins, cond_start=cond_start
         )
-        if device == "cuda":
+        if use_cpu_fallback:
+            with pytest.warns(UserWarning, match="Falling back to CPU"):
+                test_obj.add_data_cuda(a, b, a, dtype="float64")
+        elif device == "cuda":
             test_obj.add_data_cuda(a, b, a, dtype="float64")
         elif device == "cpu":
             test_obj.add_data(a, b, a)

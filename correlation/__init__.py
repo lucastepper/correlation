@@ -1,8 +1,7 @@
 # pylint: disable=no-name-in-module
 from .correlation import ConditionalCorrelation
 from .correlation_mkl import correlation
-from .correlation_torch import correlation_torch
-from .cond_corr_fft import ConditionalCorrelationFFT, correlation_2d
+from .cond_corr_fft import ConditionalCorrelationFFT, correlation_2d, correlation_torch
 from .iterative_correlation import IterativeCorrelation, VVCorr, XdUCorr
 
 __all__ = [
