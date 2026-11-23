@@ -4,17 +4,17 @@ Tools for computing time correlation functions of real-valued trajectories, with
 
 ## Installation
 
-Install the package and its Python dependencies with pip:
+Install `correlation-fft` from [PyPI](https://pypi.org/project/correlation-fft/).
 
 ```bash
-pip install .
+pip install correlation-fft
 ```
 
 The Rust extension always builds with both CPU and CUDA support. Build a wheel for your target platform and Python version with Maturin:
 
 ```bash
 maturin build --release
-pip install target/wheels/correlation-*.whl
+pip install target/wheels/correlation_fft-*.whl
 ```
 
 The Rust extension loads the NVIDIA driver when it tries to use CUDA. CPU-only machines can use the same wheel. The Rust CUDA path uses the embedded PTX and requires a compatible NVIDIA driver. The separate PyTorch CUDA path requires a CUDA-enabled PyTorch installation.
