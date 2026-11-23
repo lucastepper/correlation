@@ -4,6 +4,8 @@ build-backend = "maturin"
 
 [project]
 name = "correlation_fft"
+description = "FFT-based correlation functions using mkl_fft or implemented in Rust"
+readme = "README.md"
 classifiers = [
     "Programming Language :: Python",
     "Programming Language :: Rust"
