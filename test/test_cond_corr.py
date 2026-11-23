@@ -51,7 +51,7 @@ def corr(a, b, cond, ncorr, cond_start, cond_end, x_min, dx, nbins):
 def test_cond_corr(threads, cond_start, cond_end, device, fft):
     """Test conditional correlation"""
     use_cpu_fallback = device == "cuda" and fft and not TORCH_AVAILABLE
-    if device == "cuda" and not use_cpu_fallback:
+    if device == "cuda" and fft and not use_cpu_fallback:
         if not TORCH_AVAILABLE:
             pytest.skip("torch is not available")
         import torch
@@ -86,9 +86,14 @@ def test_cond_corr(threads, cond_start, cond_end, device, fft):
         else:
             raise ValueError("device must be cpu or cuda")
     else:
-        test_obj = correlation.ConditionalCorrelation(
-            ncorr, nbins, range_bins, cond_start, cond_end, device
-        )
+        try:
+            test_obj = correlation.ConditionalCorrelation(
+                ncorr, nbins, range_bins, cond_start, cond_end, device
+            )
+        except RuntimeError as exc:
+            if device != "cuda":
+                raise
+            pytest.skip(str(exc))
         test_obj.add_data(a, b, a, threads)
     atol = 8e-8
     if fft:
@@ -96,6 +101,38 @@ def test_cond_corr(threads, cond_start, cond_end, device, fft):
         atol = 1e-4
     # compare
     np.testing.assert_allclose(test_obj.get_result(), corr_ref, atol=atol)
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_native_auto_selects_available_device(dtype):
+    args = (3, 2, (0.0, 2.0), True, False)
+    cpu = correlation.ConditionalCorrelation(*args)
+    assert cpu.device == "cpu"
+    auto = correlation.ConditionalCorrelation(*args, device="auto")
+    try:
+        cuda = correlation.ConditionalCorrelation(*args, device="cuda")
+    except RuntimeError as exc:
+        assert "CUDA" in str(exc)
+        assert auto.device == "cpu"
+    else:
+        assert cuda.device == auto.device == "cuda"
+
+    a = np.arange(12, dtype=dtype)[::2]
+    b = (a + 1)[::-1]
+    cond = np.tile(np.array([0.25, 1.25], dtype=dtype), 3)
+    cpu.add_data([a, b], [b, a], [cond, cond], 1)
+    auto.add_data(a, b, cond, 1)
+    auto.add_data(b, a, cond, 1)
+    np.testing.assert_array_equal(auto.cond_count, cpu.cond_count)
+    np.testing.assert_allclose(auto.get_result(), cpu.get_result())
+
+
+@pytest.mark.parametrize("cond_start", [False, True])
+def test_native_auto_uses_cpu_for_end_conditioning(cond_start):
+    args = (2, 2, (0.0, 2.0), cond_start, True)
+    assert correlation.ConditionalCorrelation(*args, device="auto").device == "cpu"
+    with pytest.raises(ValueError, match="CUDA supports only cond_start=True"):
+        correlation.ConditionalCorrelation(*args, device="cuda")
 
 
 @pytest.mark.parametrize("cond_start, cond_end", [(True, False), (False, True)])

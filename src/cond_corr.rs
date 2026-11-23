@@ -1,10 +1,9 @@
-#[cfg(feature = "cuda")]
-use super::cond_corr_cuda;
+use super::cond_corr_cuda::CudaKernel;
 use super::utils;
 use indicatif::ProgressBar;
 use ndarray as nd;
 use ndarray::parallel::prelude::*;
-use np::PyArrayDyn;
+use np::{PyArray1, PyArrayDyn};
 use numpy as np;
 use numpy::IntoPyArray;
 use pyo3::exceptions::PyValueError;
@@ -14,19 +13,72 @@ fn get_index(x: f64, x_min: f64, dx: f64) -> f64 {
     f64::floor((x - x_min) / dx)
 }
 
-#[derive(Debug)]
 enum Device {
     Cpu,
-    Cuda,
+    Cuda(CudaKernel),
 }
 impl Device {
-    fn new(device: &str) -> PyResult<Device> {
+    fn new(device: &str, mode: &CorrMode) -> PyResult<Self> {
         match device {
-            "cpu" => Ok(Device::Cpu),
-            "cuda" | "gpu" => Ok(Device::Cuda),
+            "cpu" => Ok(Self::Cpu),
+            "auto" if matches!(mode, CorrMode::Start) => Ok(Self::cuda().unwrap_or(Self::Cpu)),
+            "auto" => Ok(Self::Cpu),
+            "cuda" | "gpu" if matches!(mode, CorrMode::Start) => Self::cuda(),
+            "cuda" | "gpu" => Err(PyValueError::new_err(
+                "CUDA supports only cond_start=True and cond_end=False. Use device='cpu' or 'auto' for other modes.",
+            )),
             _ => Err(PyValueError::new_err(format!("Unknown device: {}", device))),
         }
     }
+
+    fn cuda() -> PyResult<Self> {
+        CudaKernel::new().map(Self::Cuda)
+    }
+}
+
+fn float_array<T: np::Element>(input: &PyAny) -> PyResult<&PyArray1<T>> {
+    if let Ok(array) = input.downcast::<PyArray1<T>>() {
+        Ok(array)
+    } else if let Ok(array) = input.downcast::<PyArray1<f32>>() {
+        array.cast(false)
+    } else if let Ok(array) = input.downcast::<PyArray1<f64>>() {
+        array.cast(false)
+    } else {
+        Err(PyValueError::new_err(
+            "Trajectories must be one-dimensional NumPy arrays of float32 or float64",
+        ))
+    }
+}
+
+fn validate_lengths(data1: usize, data2: usize, cond: usize) -> PyResult<()> {
+    if data1 != data2 {
+        return Err(PyValueError::new_err(
+            "data1 and data2 must be the same length",
+        ));
+    }
+    if data1 != cond {
+        return Err(PyValueError::new_err(
+            "cond_data and data must be the same length",
+        ));
+    }
+    Ok(())
+}
+
+fn trajectories<'py, T: np::Element>(
+    data1: Vec<&'py PyAny>,
+    data2: Vec<&'py PyAny>,
+    cond: Vec<&'py PyAny>,
+) -> PyResult<Vec<[&'py PyArray1<T>; 3]>> {
+    data1
+        .into_iter()
+        .zip(data2)
+        .zip(cond)
+        .map(|((a, b), c)| {
+            let (a, b, c) = (float_array(a)?, float_array(b)?, float_array(c)?);
+            validate_lengths(a.len(), b.len(), c.len())?;
+            Ok([a, b, c])
+        })
+        .collect()
 }
 
 enum CorrMode {
@@ -79,6 +131,7 @@ impl ConditionalCorrelation {
         }
         let dx = (range[1] - range[0]) / (nbins as f64);
         let corr_mode = CorrMode::new(cond_start, cond_end)?;
+        let device = Device::new(device, &corr_mode)?;
         let dims = match corr_mode {
             CorrMode::Both => vec![ncorr, nbins, nbins],
             _ => vec![ncorr, nbins],
@@ -98,7 +151,7 @@ impl ConditionalCorrelation {
             cond_sum,
             cond_count,
             corr_mode,
-            device: Device::new(device)?,
+            device,
         })
     }
 
@@ -123,6 +176,14 @@ impl ConditionalCorrelation {
     }
 
     #[getter]
+    fn get_device(&self) -> &'static str {
+        match self.device {
+            Device::Cpu => "cpu",
+            Device::Cuda(_) => "cuda",
+        }
+    }
+
+    #[getter]
     fn get_cond_sum<'py>(&'py self, py: Python<'py>) -> PyResult<&'py PyArrayDyn<f64>> {
         Ok(self.cond_sum.as_ref(py))
     }
@@ -141,64 +202,42 @@ impl ConditionalCorrelation {
         cond_data: &PyAny,
         nthreads: i32,
     ) -> PyResult<()> {
-        // first cast to list of PyAny so that it works for single or multiple inputs
-        // We can't use utils::convert_list_pyany_to_vec_* to cast into PyArray already,
-        // as we want PyArray1<f64> for cpu and PyArray1<f32> for cuda
+        // Accept single trajectories as well as lists of trajectories.
         let data1 = utils::convert_list_pyany_to_vec_pyany(data1)?;
         let data2 = utils::convert_list_pyany_to_vec_pyany(data2)?;
         let cond_data = utils::convert_list_pyany_to_vec_pyany(cond_data)?;
         if data1.len() != data2.len() || data2.len() != cond_data.len() {
             return Err(PyValueError::new_err("input data needs to be of same len"));
         }
-        match self.device {
+        match &self.device {
             Device::Cpu => {
-                for i in 0..data1.len() {
-                    let dat1 = data1[i].downcast::<np::PyArray1<f64>>()?;
-                    let dat2 = data2[i].downcast::<np::PyArray1<f64>>()?;
-                    let cond = cond_data[i].downcast::<np::PyArray1<f64>>()?;
-                    self._add_data_cpu(py, dat1, dat2, cond, nthreads)?;
+                for [a, b, c] in trajectories(data1, data2, cond_data)? {
+                    self._add_data_cpu(py, a, b, c, nthreads)?;
                 }
             }
-            #[cfg(feature = "cuda")]
-            Device::Cuda => {
-                // use cuda to compute the conditional sums and counts for the trajectories
-                let (cond_sum, cond_count) = cond_corr_cuda::add_data(
-                    data1,
-                    data2,
-                    cond_data,
+            Device::Cuda(kernel) => {
+                let (cond_sum, cond_count) = kernel.add_data(
+                    trajectories(data1, data2, cond_data)?,
                     self.ncorr,
                     self.nbins,
                     self.start as f32,
                     self.dx as f32,
                 )?;
-                // add results to state in self
-                // TODO fix case were self.cond_* is 3d array
                 unsafe {
-                    let mut self_cond_sum = self
-                        .cond_sum
+                    self.cond_sum
                         .as_ref(py)
-                        .reshape((self.ncorr, self.nbins))?
-                        .as_array_mut();
-                    let mut self_cond_count = self
-                        .cond_count
+                        .as_array_mut()
+                        .iter_mut()
+                        .zip(cond_sum)
+                        .for_each(|(total, value)| *total += f64::from(value));
+                    self.cond_count
                         .as_ref(py)
-                        .reshape((self.ncorr, self.nbins))?
-                        .as_array_mut();
-                    self_cond_sum
+                        .as_array_mut()
                         .iter_mut()
-                        .zip(cond_sum.iter())
-                        .for_each(|(o, x)| *o += *x);
-                    self_cond_count
-                        .iter_mut()
-                        .zip(cond_count.iter())
-                        .for_each(|(o, x)| *o += *x);
+                        .zip(cond_count)
+                        .for_each(|(total, count)| *total += count);
                 }
             }
-            #[cfg(not(feature = "cuda"))]
-            Device::Cuda => panic!(
-                "Invalid device {:?}, build package without cuda support",
-                self.device
-            ),
         };
         Ok(())
     }
@@ -216,16 +255,7 @@ impl ConditionalCorrelation {
         let data1 = unsafe { data1.as_array() };
         let data2 = unsafe { data2.as_array() };
         let cond_data = unsafe { cond_data.as_array() };
-        if data1.len() != data2.len() {
-            return Err(PyErr::new::<PyValueError, _>(
-                "data1 and data2 must be the same length",
-            ));
-        }
-        if cond_data.len() != data1.len() {
-            return Err(PyErr::new::<PyValueError, _>(
-                "cond_data and data must be the same length",
-            ));
-        }
+        validate_lengths(data1.len(), data2.len(), cond_data.len())?;
         let bar = ProgressBar::new(self.ncorr as u64);
         let pool = utils::get_pool(nthreads)?;
         let nbins_f64 = self.nbins as f64;
@@ -241,9 +271,10 @@ impl ConditionalCorrelation {
                 .zip(cond_count.axis_iter_mut(nd::Axis(0)).into_par_iter())
                 .enumerate()
                 .for_each(|(tcorr, (mut cond_sum, mut cond_count))| {
+                    let pairs = data1.len().saturating_sub(tcorr);
                     match self.corr_mode {
                         CorrMode::Start => {
-                            for i in 0..(data1.len() - tcorr) {
+                            for i in 0..pairs {
                                 let idx = get_index(cond_data[i], self.start, self.dx);
                                 if idx >= 0. && idx < nbins_f64 {
                                     let idx = idx as usize;
@@ -253,7 +284,7 @@ impl ConditionalCorrelation {
                             }
                         }
                         CorrMode::End => {
-                            for i in 0..(data1.len() - tcorr) {
+                            for i in 0..pairs {
                                 let idx = get_index(cond_data[i + tcorr], self.start, self.dx);
                                 if idx >= 0. && idx < nbins_f64 {
                                     let idx = idx as usize;
@@ -263,7 +294,7 @@ impl ConditionalCorrelation {
                             }
                         }
                         _ => {
-                            for i in 0..(data1.len() - tcorr) {
+                            for i in 0..pairs {
                                 let idx1 = get_index(cond_data[i], self.start, self.dx);
                                 let idx2 = get_index(cond_data[i + tcorr], self.start, self.dx);
                                 if idx1 >= 0. && idx1 < nbins_f64 {

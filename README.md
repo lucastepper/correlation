@@ -10,14 +10,14 @@ Install the package and its Python dependencies with pip:
 pip install .
 ```
 
-This builds the Rust extension with CPU support by default. To build CUDA support, build a wheel with Maturin and install it:
+The Rust extension always builds with both CPU and CUDA support. Build a wheel for your target platform and Python version with Maturin:
 
 ```bash
-maturin build --release --features cuda
+maturin build --release
 pip install target/wheels/correlation-*.whl
 ```
 
-CUDA builds require a CUDA driver library and toolchain available to the linker. CUDA execution in the PyTorch API also requires a CUDA-enabled PyTorch installation.
+The Rust extension loads the NVIDIA driver when it tries to use CUDA. CPU-only machines can use the same wheel. The Rust CUDA path uses the embedded PTX and requires a compatible NVIDIA driver. The separate PyTorch CUDA path requires a CUDA-enabled PyTorch installation.
 
 ## Features and usage
 
@@ -54,7 +54,9 @@ cc.add_data(x, x, condition)
 result = cc.get_result()
 ```
 
-The default device is CPU. CUDA device support is available only when the extension was built with the `cuda` Cargo feature.
+The default device is `"cpu"`. `device="auto"` selects CUDA when the driver can load the kernel and `cond_start=True, cond_end=False`. Otherwise it selects CPU. Explicit `device="cuda"` (or `"gpu"`) raises an error if the driver, kernel, or conditioning mode is unavailable. The `device` property reports the selected backend.
+
+`add_data` accepts `float32` and `float64` NumPy arrays on both backends. The CPU computes in double precision. The CUDA kernel converts inputs to single precision. Use `device="cpu"` to keep double precision.
 
 `ConditionalCorrelationFFT` accumulates conditional correlations using FFTs. Construct it with `from_range(nbins, traj_range, trunc)` or `from_dx(dx, nbins, start, trunc)`, add trajectories with `add_data(...)`, then call `get_result()`.
 Without PyTorch, `add_data_cuda(...)` issues a warning and uses `add_data(...)` on the CPU.
