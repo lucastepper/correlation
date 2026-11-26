@@ -42,6 +42,20 @@ from correlation import correlation_torch
 acf_gpu = correlation_torch(x, device="cuda")
 ```
 
+### Benchmark
+
+The benchmark for the correlation of a 100 million-entry real array on an 11th Gen Intel(R) Core(TM) i9-11900K @ 3.50GHz CPU yields:
+
+```bash
+python benchmark_correlation.py --size 100000000 --repeats 20
+```
+
+| Implementation | Median time (s) | Peak RAM usage (GiB) |
+|---|---:|---:|
+| `package (mkl_fft)` | 3.203 | 4.47 |
+| `numpy.fft` | 9.813 | 8.94 |
+| `scipy.fft` | 8.263 | 8.94 |
+
 ### Conditional correlation
 
 `ConditionalCorrelation` is a Rust-backed accumulator. Choose a trajectory range and number of bins, then add trajectory arrays and retrieve the result:

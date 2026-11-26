@@ -21,6 +21,11 @@ dependencies = [
     "numba",
     "gle_sim",
 ]
+
+[project.urls]
+Repository = "https://github.com/lucastepper/correlation"
+Issues = "https://github.com/lucastepper/correlation/issues"
+
 [project.optional-dependencies]
 test = [
   "pytest >= 7",
